@@ -58,7 +58,7 @@ export default function DonatePage() {
     const maxKg = Math.max(1, ...(flows?.edges ?? []).map((e) => e.kg));
     for (const e of flows?.edges ?? []) {
       if (e.destination_id !== destId) continue;
-      out.push({ growerId: e.grower_id, destinationId: e.destination_id, status: e.status, weight: e.kg / maxKg, label: `${num(e.kg)} kg ${e.crops.toLowerCase()} · ${e.status}` });
+      out.push({ growerId: e.grower_id, destinationId: e.destination_id, status: e.status, weight: e.kg / maxKg, path: e.path, label: `${num(e.kg)} kg ${e.crops.toLowerCase()} · ${e.status}` });
     }
     const source = pickedItems.length ? pickedItems : catalog.filter((i) => i.available);
     const already = new Set(out.map((e) => e.growerId));

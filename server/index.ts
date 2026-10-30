@@ -9,6 +9,8 @@ import { ASSUMPTIONS, catalog, loadNetwork, plantingWindow } from "./optimizer.j
 import { wikipediaSummary } from "./articles.js";
 import { farmerDetail, farmerStats, listFarmers } from "./farmers.js";
 import { listCommitments, markHarvestFailed, markHarvestReady } from "./harvest.js";
+import { deliverRun, dispatchRun, listRuns, PART_LOAD, proposeRuns, TRUCK } from "./dispatch.js";
+import { MOMBASA_PORT, roadNetwork, roadPath } from "./roads.js";
 import { advanceFarmerOrder, captureFarmerOrder, createFarmerOrder, listFarmerOrders, refundFarmerOrder, shopCatalog } from "./shop.js";
 import { cropBlurbs, cropGrowth } from "./seed/kenya.js";
 import {
@@ -114,6 +116,15 @@ app.get(
   }),
 );
 
+// Road network (for drawing) and road-following paths.
+app.get("/api/roads", (_req, res) => res.set("Cache-Control", "public, max-age=3600").json(roadNetwork()));
+
+/** Polyline from a supplier to a point, along the road network (sea freight joins at Mombasa). */
+function pathFor(from: { lat: number; lng: number; transport?: string }, to: { lat: number; lng: number }): [number, number][] {
+  if (from.transport === "sea") return [[from.lat, from.lng], ...roadPath(MOMBASA_PORT, to).coords];
+  return roadPath(from, to).coords;
+}
+
 // Network topology: every node, and every route money has been planned along.
 app.get("/api/flows", (_req, res) => {
   const growers = db.prepare(`SELECT id, name, kind, town, county, country, transport, lat, lng FROM growers`).all();
@@ -149,7 +160,15 @@ app.get("/api/flows", (_req, res) => {
          FROM farmer_orders o JOIN crops c ON c.id = o.crop_id WHERE o.status = 'paid' GROUP BY supplier_id, buyer_id`,
     )
     .all();
-  res.json({ growers, destinations, edges: [...edges, ...orderEdges] });
+  // Attach the road path for each route so maps can draw it along the highways.
+  const gById = new Map((growers as any[]).map((g) => [g.id, g]));
+  const dById = new Map((destinations as any[]).map((d) => [d.id, d]));
+  const withPaths = [...(edges as any[]), ...(orderEdges as any[])].map((e) => {
+    const from = gById.get(e.grower_id);
+    const to = dById.get(e.destination_id) ?? gById.get(e.destination_id);
+    return from && to ? { ...e, path: pathFor(from, to) } : e;
+  });
+  res.json({ growers, destinations, edges: withPaths });
 });
 
 app.get("/api/network", (_req, res) => {
@@ -229,7 +248,7 @@ app.get("/api/donations/:id", (req, res) => {
     donation: { ...d, choices: JSON.parse(d.choices ?? "[]") },
     destination,
     plan: plan ? { ...plan, summary: plan.summary ? JSON.parse(plan.summary) : null, trace: JSON.parse(plan.trace) } : null,
-    lines,
+    lines: (lines as any[]).map((l) => ({ ...l, path: pathFor({ lat: l.lat, lng: l.lng, transport: l.transport }, destination as any) })),
     shipments,
     payouts,
     commitments: plan ? listCommitments(db, { planId: plan.id }) : [],
@@ -362,6 +381,26 @@ op.post("/shipments/:id/advance", (req, res) => {
   res.json({ ok: true, status: next });
 });
 
+// Dispatch: group paid shipments into truck runs on the road network.
+op.get("/dispatch", (_req, res) => res.json({ truck: TRUCK, partLoad: PART_LOAD, proposals: proposeRuns(db), runs: listRuns(db) }));
+op.post("/dispatch", (req, res) => {
+  const keys = Array.isArray(req.body?.keys) ? req.body.keys.filter((k: unknown): k is string => typeof k === "string") : [];
+  const mode = req.body?.mode === "truck" || req.body?.mode === "part_loads" ? req.body.mode : undefined;
+  const run = dispatchRun(db, keys, mode);
+  res.json({
+    ok: true,
+    message:
+      run.mode === "truck"
+        ? `Truck dispatched: ${run.stops.length} stops, ${run.km} km, about ${run.days} days.`
+        : `Sent as part loads on scheduled lorries (${run.cargo.length} consignment${run.cargo.length === 1 ? "" : "s"}).`,
+    run,
+  });
+});
+op.post("/dispatch/:id/delivered", (req, res) => {
+  deliverRun(db, String(req.params.id));
+  res.json({ ok: true, message: "Run delivered: every load on it is marked delivered." });
+});
+
 op.get("/harvests", (_req, res) => res.json(listCommitments(db)));
 op.post("/harvests/:id/ready", h(async (req, res) => {
   try {
@@ -407,6 +446,6 @@ if (fs.existsSync(dist)) {
 app.listen(config.port, () => {
   console.log(`Plantago API on http://localhost:${config.port}`);
   console.log(`  PayPal: ${paypalSimulated ? "SIMULATION (no credentials set)" : `sandbox (${config.paypal.apiBase})`}`);
-  console.log(`  Planner: ${config.planner.enabled ? `AI (${config.planner.model})` : "rule-based (no ANTHROPIC_API_KEY)"}`);
+  console.log(`  Planner: ${config.planner.enabled ? `AI (${config.planner.model})` : "rule-based (no PLANNER_API_KEY / DEEPSEEK_API_KEY)"}`);
   if (!config.operatorToken) console.log("  Operator pages are open (set OPERATOR_TOKEN before deploying).");
 });

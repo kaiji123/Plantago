@@ -16,10 +16,16 @@ export const config = {
     payoutReceiverOverride: env("PAYPAL_PAYOUT_RECEIVER_OVERRIDE"),
   },
   planner: {
-    model: env("PLANNER_MODEL", "claude-opus-5-5"),
-    // The SDK also reads ANTHROPIC_AUTH_TOKEN or an `ant auth login` profile,
-    // but on a server we want an explicit key.
-    enabled: env("ANTHROPIC_API_KEY") !== "" || env("ANTHROPIC_AUTH_TOKEN") !== "",
+    // DeepSeek by default; any OpenAI-compatible chat API works (set base URL + model).
+    apiKey: env("PLANNER_API_KEY") || env("DEEPSEEK_API_KEY"),
+    baseUrl: env("PLANNER_BASE_URL", "https://api.deepseek.com"),
+    model: env("PLANNER_MODEL", "deepseek-flash"),
+    reasoningEffort: env("PLANNER_REASONING_EFFORT", "high"),
+    /** DeepSeek's `thinking` switch; set PLANNER_THINKING=off for providers that reject unknown fields. */
+    thinking: env("PLANNER_THINKING", "on") !== "off",
+    get enabled() {
+      return this.apiKey !== "";
+    },
   },
 };
 

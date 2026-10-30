@@ -28,10 +28,10 @@ services:
         sync: false
       - key: PAYPAL_PAYOUT_RECEIVER_OVERRIDE
         sync: false
-      - key: ANTHROPIC_API_KEY
+      - key: DEEPSEEK_API_KEY
         sync: false
       - key: PLANNER_MODEL
-        value: claude-opus-5-5
+        value: deepseek-flash
       - key: OPERATOR_TOKEN
         sync: false
       - key: PAYOUT_THRESHOLD_USD

@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api, num, usd, type FarmerDetail, type ShopItem } from "../api";
 import CropIcon from "../components/CropIcon";
+import FarmerSwitcher from "../components/FarmerSwitcher";
 import { useConfig } from "../hooks";
 
 /** A farmer spends their own money (often their Plantago earnings) on tools and seed. Plantago delivers. */
@@ -23,7 +24,13 @@ export default function ShopPage() {
     api.farmer(id).then(setFarmer).catch((e) => setError(e.message));
     api.shop(id).then(setItems).catch((e) => setError(e.message));
   };
-  useEffect(load, [id]);
+  useEffect(() => {
+    load();
+    setCropId(null);
+    setDone(null);
+    setError(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]);
 
   const item = items.find((i) => i.cropId === cropId) ?? null;
   const opt = item?.options.find((o) => o.supplierId === supplierId) ?? item?.options[0] ?? null;
@@ -72,6 +79,7 @@ export default function ShopPage() {
 
   return (
     <div className="page">
+      <FarmerSwitcher current={g.id} to="shop" />
       <p className="muted small"><Link to={`/farmers/${g.id}`}>← {g.name}</Link></p>
       <h1 className="h-page">Shop for {g.name}</h1>
       <p className="muted">
@@ -170,7 +178,7 @@ export default function ShopPage() {
                 )
               )}
               <p className="muted small" style={{ margin: 0 }}>
-                Refundable until the supplier is paid. In this demo anyone can open a farmer's shop; a real version would sign farmers in with PayPal.
+                Refundable until the supplier is paid.
               </p>
             </>
           )}

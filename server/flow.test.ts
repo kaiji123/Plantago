@@ -1,11 +1,11 @@
-// End-to-end money flow in simulation mode (no PayPal or Claude credentials).
+// End-to-end money flow in simulation mode (no PayPal or AI planner credentials).
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
 process.env.PAYPAL_CLIENT_ID = "";
 process.env.PAYPAL_CLIENT_SECRET = "";
-process.env.ANTHROPIC_API_KEY = "";
-process.env.ANTHROPIC_AUTH_TOKEN = "";
+process.env.PLANNER_API_KEY = "";
+process.env.DEEPSEEK_API_KEY = "";
 process.env.PAYOUT_THRESHOLD_USD = "100000";
 
 const { openDb } = await import("./db.js");
@@ -169,4 +169,50 @@ test("farmer shop: farmer pays with PayPal, supplier is paid out, delivery track
   const stockFinal = (db.prepare(`SELECT stock_kg s FROM offers WHERE grower_id=? AND crop_id='hermetic_bag'`).get(best.supplierId) as any).s;
   assert.equal(stockFinal, stockAfter);
   assert.equal(pay.ledger(db).totals.heldCents, 0);
+});
+
+test("dispatch: big loads share a truck and save money; small loads go as part loads", async () => {
+  const db = openDb(":memory:");
+  const dispatch = await import("./dispatch.js");
+  const give = async (dest: string, dollars: number) => {
+    const d = await pay.createDonation(db, { destinationId: dest, amountCents: dollars * 100, goal: "" });
+    await pay.captureDonation(db, d.donationId, d.orderId);
+    await waitForPlan(db, d.donationId);
+  };
+
+  // Small: one $40 donation is far too little for its own truck.
+  await give("garissa", 40);
+  await pay.runPayoutBatch(db);
+  const [small] = dispatch.proposeRuns(db);
+  assert.equal(small.recommended, "part_loads");
+  assert.ok(small.breakEvenKg === null || small.breakEvenKg > small.loadKg);
+  const sentSmall = dispatch.dispatchRun(db, small.cargo.map((c) => c.key));
+  assert.equal(sentSmall.mode, "part_loads");
+
+  // Big: Lodwar and Kakuma together carry enough for a dedicated truck.
+  await give("lodwar", 700);
+  await give("kakuma", 500);
+  await pay.runPayoutBatch(db);
+  const runs = dispatch.proposeRuns(db);
+  assert.ok(runs.every((r) => !r.stops.some((s) => /Uganda|Lira|Soroti|Moroto/.test(s.name))), "imports are collected at the Kenyan border");
+  const run = runs.find((r) => r.recommended === "truck")!;
+  assert.ok(run, "the heavy loads get a dedicated truck");
+  assert.ok(run.stops[0].kind === "pickup" && run.stops.at(-1)!.kind === "drop", "pickups before drops");
+  assert.ok(run.stops.some((s) => s.name === "Kakuma") && run.stops.some((s) => s.name === "Lodwar"));
+  assert.ok(run.loadKg <= dispatch.TRUCK.capacityKg);
+  assert.ok(run.savingsCents > 0 && run.costCents < run.separateCostCents);
+  assert.ok(run.path.length > run.stops.length, "path follows the road network");
+
+  const keys = run.cargo.map((c) => c.key);
+  const sent = dispatch.dispatchRun(db, keys);
+  assert.equal(sent.mode, "truck");
+  const shipped = db.prepare(`SELECT COUNT(*) n FROM shipments WHERE run_id = ? AND status = 'shipped'`).get(sent.id) as any;
+  assert.equal(shipped.n, keys.length);
+  for (const r of dispatch.proposeRuns(db)) dispatch.dispatchRun(db, r.cargo.map((c) => c.key));
+  assert.equal(dispatch.proposeRuns(db).length, 0, "nothing left to dispatch");
+  assert.throws(() => dispatch.dispatchRun(db, keys), /no longer ready/);
+
+  dispatch.deliverRun(db, sent.id);
+  const delivered = db.prepare(`SELECT COUNT(*) n FROM shipments WHERE run_id = ? AND status = 'delivered'`).get(sent.id) as any;
+  assert.equal(delivered.n, keys.length);
 });

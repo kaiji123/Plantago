@@ -5,14 +5,15 @@ import { api, getOperatorToken, setOperatorToken, usd } from "../api";
 import Grid, { dateCol, moneyCol } from "../components/Grid";
 import { ShipAction, ShipStatusPill, type ShipStatus } from "../components/ShipmentStatus";
 import { PromiseCard } from "./Farmers";
+import Dispatch from "../components/Dispatch";
 import { useConfig, usePoll } from "../hooks";
 
-type Tab = "shipments" | "harvests" | "payouts" | "donations" | "network";
+type Tab = "dispatch" | "shipments" | "harvests" | "payouts" | "donations" | "network";
 
 export default function OperatorPage() {
   const cfg = useConfig();
   const [token, setToken] = useState(getOperatorToken());
-  const [tab, setTab] = useState<Tab>("shipments");
+  const [tab, setTab] = useState<Tab>("dispatch");
   const [msg, setMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const { data, error, reload } = usePoll(() => api.operator.overview(), 4000, [token]);
@@ -196,13 +197,14 @@ export default function OperatorPage() {
       {error && <p className="error">{error}</p>}
 
       <div className="tabs">
-        {(["shipments", "harvests", "payouts", "donations", "network"] as Tab[]).map((t) => (
+        {(["dispatch", "shipments", "harvests", "payouts", "donations", "network"] as Tab[]).map((t) => (
           <button key={t} className={tab === t ? "on" : ""} onClick={() => setTab(t)}>
-            {t === "network" ? "Plant network" : t === "harvests" ? "Harvest buy-back" : t[0].toUpperCase() + t.slice(1)}
+            {t === "network" ? "Plant network" : t === "harvests" ? "Harvest buy-back" : t === "dispatch" ? "🚚 Dispatch" : t[0].toUpperCase() + t.slice(1)}
           </button>
         ))}
       </div>
 
+      {tab === "dispatch" && <Dispatch act={act} busy={busy} />}
       {tab === "shipments" && <Grid rows={data?.shipments ?? []} cols={shipmentCols} height={440} />}
       {tab === "harvests" && (
         <>

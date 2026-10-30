@@ -10,6 +10,8 @@ export interface PlanDraft {
   explanation: string;
   planner: "ai" | "rules";
   model: string | null;
+  /** AI planner token usage and estimated cost, for the operator. */
+  usage?: unknown;
 }
 
 export interface TraceEntry {
@@ -96,7 +98,7 @@ function persistDraft(db: DB, planId: string, draft: PlanDraft): void {
       a.foodNowShare,
       draft.headline,
       draft.explanation,
-      JSON.stringify({ totals: a.totals, baseline: a.baseline, notes: a.notes, localBoost: a.localBoost, budgetCents: a.budgetCents }),
+      JSON.stringify({ totals: a.totals, baseline: a.baseline, notes: a.notes, localBoost: a.localBoost, budgetCents: a.budgetCents, usage: draft.usage ?? null }),
       now(),
       planId,
     );

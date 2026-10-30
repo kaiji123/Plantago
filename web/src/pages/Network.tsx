@@ -26,6 +26,7 @@ export default function NetworkPage() {
     destinationId: e.destination_id,
     status: e.status,
     weight: e.kg / maxKg,
+    path: e.path,
     label: `${growerById.get(e.grower_id)?.name} → ${destById.get(e.destination_id)?.name ?? growerById.get(e.destination_id)?.name}: ${e.mode === "farmer_order" ? "farmer purchase, " : ""}${num(e.kg)} ${e.mode === "food_now" ? "kg " : ""}${e.crops.toLowerCase()} (${EDGE_STYLE[e.status].label.toLowerCase()})`,
   }));
 

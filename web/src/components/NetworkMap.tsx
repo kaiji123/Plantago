@@ -2,7 +2,7 @@ import type { FeatureCollection } from "geojson";
 import { useEffect, useState } from "react";
 import { CircleMarker, GeoJSON, MapContainer, Pane, Polyline, Tooltip, useMap, useMapEvents } from "react-leaflet";
 import { feature } from "topojson-client";
-import type { FlowGrower, NetDestination } from "../api";
+import { api, type FlowGrower, type NetDestination, type RoadNetwork } from "../api";
 
 export type EdgeStatus = "candidate" | "queued" | "paid" | "shipped" | "delivered";
 
@@ -13,6 +13,8 @@ export interface MapEdge {
   /** Relative load, 0..1. */
   weight?: number;
   label?: string;
+  /** Polyline along the road network; drawn instead of a curve when present. */
+  path?: [number, number][];
 }
 
 // One visual language for both the 2D map and the globe.
@@ -87,7 +89,7 @@ function loadCountries(): Promise<FeatureCollection> {
   return countriesPromise;
 }
 
-function Basemap({ highlight }: { highlight: string[] }) {
+export function Basemap({ highlight = [] }: { highlight?: string[] }) {
   const [countries, setCountries] = useState<FeatureCollection | null>(null);
   useEffect(() => {
     loadCountries().then(setCountries).catch(() => setCountries(null));
@@ -131,6 +133,38 @@ function ZoomWatcher({ onZoom }: { onZoom: (z: number) => void }) {
   return null;
 }
 
+/** The highway network, drawn faintly under everything else. */
+export function RoadsLayer({ roads, k = 1 }: { roads: RoadNetwork | null; k?: number }) {
+  if (!roads) return null;
+  return (
+    <Pane name="roads" style={{ zIndex: 300 }}>
+      {roads.edges.map((e) => (
+        <Polyline
+          key={`${e.from}-${e.to}`}
+          positions={e.coords}
+          interactive={false}
+          pathOptions={{
+            color: e.surface === "paved" ? "#a89f8a" : e.surface === "fair" ? "#c2b9a3" : "#cfc6b2",
+            weight: (e.surface === "paved" ? 1.6 : 1.2) * Math.min(k, 1.8),
+            dashArray: e.surface === "rough" ? "2 4" : undefined,
+            opacity: 0.9,
+          }}
+        />
+      ))}
+    </Pane>
+  );
+}
+
+let roadsPromise: Promise<RoadNetwork> | null = null;
+export function useRoads(): RoadNetwork | null {
+  const [roads, setRoads] = useState<RoadNetwork | null>(null);
+  useEffect(() => {
+    roadsPromise ??= api.roads();
+    roadsPromise.then(setRoads).catch(() => setRoads(null));
+  }, []);
+  return roads;
+}
+
 /** Fit the view once per change of what's shown. */
 function FitTo({ points, maxZoom }: { points: LatLng[]; maxZoom: number }) {
   const map = useMap();
@@ -153,6 +187,7 @@ export default function NetworkMap({
   showLegend = true,
   fadeIdle = true,
   view = "fit",
+  showRoads = true,
 }: {
   growers: FlowGrower[];
   destinations: NetDestination[];
@@ -164,7 +199,10 @@ export default function NetworkMap({
   fadeIdle?: boolean;
   /** "fit": zoom to the routes shown. "world": show the whole global network. */
   view?: "fit" | "world";
+  /** Draw the highway network underneath. */
+  showRoads?: boolean;
 }) {
+  const roads = useRoads();
   const [zoom, setZoom] = useState(view === "world" ? 3 : 5);
   const k = zoomScale(zoom);
   const g = new Map(growers.map((x) => [x.id, x]));
@@ -197,6 +235,7 @@ export default function NetworkMap({
           style={{ height: "100%", width: "100%" }}
         >
           <Basemap highlight={[...new Set(edges.map((e) => g.get(e.growerId)?.country).filter((c): c is string => !!c && c !== "Kenya"))]} />
+          {showRoads && <RoadsLayer roads={roads} k={k} />}
           <FitTo points={fitPoints} maxZoom={view === "world" ? 5 : 7} />
           <ZoomWatcher onZoom={setZoom} />
 
@@ -208,7 +247,7 @@ export default function NetworkMap({
             return (
               <Polyline
                 key={`${e.growerId}-${e.destinationId}-${e.status}-${i}`}
-                positions={routePoints(from, to)}
+                positions={e.path ?? routePoints(from, to)}
                 pathOptions={{
                   color: st.color,
                   weight: edgeWidth(e) * k,

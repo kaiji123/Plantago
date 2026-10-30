@@ -73,3 +73,14 @@ test("every chosen tool gets at least one unit when the budget allows", () => {
   const tiny = allocate(net, { destinationId: "mandera", budgetCents: 1000, foodNowShare: 0, seedCropIds: [], toolIds: ["drip_kit"] });
   assert.ok(tiny.notes.some((n) => n.includes("Family drip-irrigation kit")), JSON.stringify(tiny.notes));
 });
+
+test("a farmer group's buy-back priority applies only at its own destination", () => {
+  const db2 = openDb(":memory:");
+  db2.prepare(`INSERT INTO growers (id, name, kind, town, county, lat, lng, paypal_email, country, transport) VALUES ('fg-lodwar','Lodwar Farmer Group','farmer_group','Lodwar','Turkana',3.24,35.72,'x@example.com','Kenya','road')`).run();
+  db2.prepare(`INSERT INTO offers VALUES ('fg-lodwar','sorghum',46,200)`).run();
+  const n2 = loadNetwork(db2);
+  const atHome = allocate(n2, { destinationId: "lodwar", budgetCents: 5000, foodNowShare: 1 });
+  assert.ok(atHome.lines[0].growerId === "fg-lodwar", "bought first at home");
+  const away = allocate(n2, { destinationId: "marsabit", budgetCents: 5000, foodNowShare: 1 });
+  assert.ok(!away.notes.some((n) => n.includes("Buys back")), "no buy-back priority elsewhere");
+});

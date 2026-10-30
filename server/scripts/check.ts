@@ -1,7 +1,7 @@
-// Checks that PayPal sandbox and Claude credentials work.
-//   npm run check            → PayPal auth + create an order, Claude ping
+// Checks that PayPal sandbox and AI planner (DeepSeek) credentials work.
+//   npm run check            → PayPal auth + create an order, AI planner ping (with a tool call)
 //   npm run check -- --payout → also send a $1.00 sandbox payout (needs Payouts enabled)
-import Anthropic from "@anthropic-ai/sdk";
+import OpenAI from "openai";
 import { config, paypalSimulated } from "../config.js";
 import * as paypal from "../paypal.js";
 
@@ -37,21 +37,29 @@ if (paypalSimulated) {
   console.log(config.paypal.webhookId ? "  ✓ Webhook ID set" : "  · PAYPAL_WEBHOOK_ID not set (optional; needs a public URL)");
 }
 
-console.log("\nClaude (AI planner)");
+console.log("\nAI planner");
 if (!config.planner.enabled) {
-  bad("ANTHROPIC_API_KEY not set: plans use the rule-based planner");
+  bad("DEEPSEEK_API_KEY (or PLANNER_API_KEY) not set: plans use the rule-based planner");
   failed = true;
 } else {
   try {
-    const client = new Anthropic();
-    const r = await client.messages.create({
+    const client = new OpenAI({ apiKey: config.planner.apiKey, baseURL: config.planner.baseUrl });
+    const t0 = Date.now();
+    // Ask for a tool call: the planner depends on tool calling, so test exactly that.
+    const r = await client.chat.completions.create({
       model: config.planner.model,
-      max_tokens: 64,
-      output_config: { effort: "low" },
-      messages: [{ role: "user", content: "Reply with the single word: ready" }],
-    });
-    const text = r.content.find((b) => b.type === "text");
-    ok(`${config.planner.model} responded: ${text && "text" in text ? text.text.trim() : r.stop_reason}`);
+      messages: [{ role: "user", content: "Call the ping tool with message 'ready'." }],
+      tools: [{ type: "function", function: { name: "ping", description: "Health check", parameters: { type: "object", properties: { message: { type: "string" } }, required: ["message"] } } }],
+      max_tokens: 2000,
+      reasoning_effort: "low",
+      ...(config.planner.thinking ? { thinking: { type: "enabled" } } : {}),
+    } as any);
+    const call = r.choices[0].message.tool_calls?.[0] as any;
+    if (call?.function?.name === "ping") ok(`${config.planner.model} at ${config.planner.baseUrl} made a tool call in ${Date.now() - t0} ms (${call.function.arguments})`);
+    else {
+      bad(`${config.planner.model} answered without calling the tool (finish: ${r.choices[0].finish_reason})`);
+      failed = true;
+    }
   } catch (e) {
     bad(`${(e as Error).message}`);
     failed = true;

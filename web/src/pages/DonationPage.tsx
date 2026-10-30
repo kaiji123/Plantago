@@ -54,6 +54,7 @@ export default function DonationPage() {
       destinationId: dest.id,
       status,
       weight: l.kg / maxKg,
+      path: l.path,
       label: `${l.grower_name}: ${num(l.kg, 1)} kg ${l.crop_name.toLowerCase()} · ${Math.round(l.distance_km)} km`,
     };
   });

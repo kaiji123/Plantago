@@ -6,6 +6,7 @@ import Grid, { moneyCol } from "../components/Grid";
 import { KIND_COLOR, KIND_LABEL } from "../components/NetworkMap";
 import { usePoll } from "../hooks";
 import { SHIP_META, ShipStatusPill } from "../components/ShipmentStatus";
+import FarmerSwitcher, { lastFarmer } from "../components/FarmerSwitcher";
 
 export default function FarmersPage() {
   const { id } = useParams();
@@ -56,6 +57,13 @@ function FarmerList() {
           <Stat value={timeToCash(s.medianHoursToCash)} label="median time from donation to a supplier's cash" />
         </div>
       )}
+      <div className="card try-shop">
+        <div>
+          <strong>Try the farmer shop</strong>
+          <div className="muted small">See it as a farmer would: spend earnings from Plantago on tools and seed, delivered to the village.</div>
+        </div>
+        <Link className="btn primary" to={`/farmers/${lastFarmer() ?? "fg-lodwar"}/shop`}>🛒 Open the shop</Link>
+      </div>
       <div className="row filters">
         <input className="search" placeholder="Search suppliers" value={q} onChange={(e) => setQ(e.target.value)} />
         <label className="row small" style={{ gap: 6, fontWeight: 600 }}>
@@ -77,6 +85,7 @@ function FarmerDetailPage({ id }: { id: string }) {
 
   return (
     <div className="page">
+      {canShopKind(g.kind) && <FarmerSwitcher current={g.id} to="profile" />}
       <p className="muted small"><Link to="/farmers">← All farmers</Link></p>
       <div className="row" style={{ gap: 10 }}>
         <i className="kind-dot big" style={{ background: KIND_COLOR[g.kind] }} />
@@ -198,6 +207,8 @@ function FarmerDetailPage({ id }: { id: string }) {
     </div>
   );
 }
+
+const canShopKind = (k: string) => ["farm", "coop", "farmer_group"].includes(k);
 
 export function PromiseCard({ c, action }: { c: Commitment; action?: React.ReactNode }) {
   const pct = c.committed_kg ? Math.min(100, (c.bought_kg / c.committed_kg) * 100) : 0;

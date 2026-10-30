@@ -97,6 +97,8 @@ export interface FlowEdge {
   plans: number;
   crops: string;
   status: "queued" | "paid" | "shipped" | "delivered";
+  /** Polyline along the road network. */
+  path?: [number, number][];
 }
 export interface Flows {
   growers: FlowGrower[];
@@ -134,6 +136,7 @@ export interface PlanLine {
   payout_status: string | null;
   paypal_item_id: string | null;
   paypal_batch_id: string | null;
+  path?: [number, number][];
 }
 
 export interface Shipment {
@@ -199,6 +202,62 @@ export interface DonationView {
   shipments: Shipment[];
   payouts: { id: string; status: string; amount_cents: number; paypal_item_id: string | null; paypal_batch_id: string | null; grower_name: string }[];
   commitments: Commitment[];
+}
+
+export interface RoadNetwork {
+  nodes: { id: string; name: string; lat: number; lng: number; country: string; port?: boolean; border?: boolean }[];
+  edges: { from: string; to: string; surface: "paved" | "fair" | "rough"; road: string; border: boolean; coords: [number, number][] }[];
+}
+export interface DispatchStop {
+  kind: "pickup" | "drop";
+  id: string;
+  name: string;
+  note?: string;
+  lat: number;
+  lng: number;
+  cargo: string[];
+  kg: number;
+}
+export interface RunPlan {
+  key: string;
+  vehicle: string;
+  capacityKg: number;
+  loadKg: number;
+  stops: DispatchStop[];
+  km: number;
+  hours: number;
+  days: number;
+  borderCrossings: number;
+  roads: string[];
+  path: [number, number][];
+  truckCostCents: number;
+  partLoadCostCents: number;
+  recommended: "truck" | "part_loads";
+  costCents: number;
+  breakEvenKg: number | null;
+  separateCostCents: number;
+  separateKm: number;
+  savingsCents: number;
+  cargo: { key: string; kind: "donation" | "farmer_order"; description: string; weightKg: number; pickup: { name: string }; drop: { name: string } }[];
+}
+export interface DispatchRun {
+  id: string;
+  status: "on_road" | "delivered";
+  mode: "truck" | "part_loads";
+  vehicle: string;
+  capacity_kg: number;
+  load_kg: number;
+  km: number;
+  hours: number;
+  days: number;
+  cost_cents: number;
+  separate_cost_cents: number;
+  stops: DispatchStop[];
+  path: [number, number][];
+  roads: string[];
+  cargo: { key: string; kind: string; description: string; weightKg: number; from: string; to: string }[];
+  created_at: string;
+  delivered_at: string | null;
 }
 
 export interface Commitment {
@@ -358,6 +417,7 @@ export const api = {
   network: () => req<any>("GET", "/api/network"),
   catalog: (destinationId: string) => req<CatalogItem[]>("GET", `/api/catalog?destinationId=${encodeURIComponent(destinationId)}`),
   flows: () => req<Flows>("GET", "/api/flows"),
+  roads: () => req<RoadNetwork>("GET", "/api/roads"),
   article: (cropId: string) => req<Article>("GET", `/api/articles/${encodeURIComponent(cropId)}`),
   createDonation: (b: { destinationId: string; amount: string; goal: string; choices: string[] }) =>
     req<{ donationId: string; orderId: string }>("POST", "/api/donations", b),
@@ -379,6 +439,9 @@ export const api = {
     advance: (id: string) => req("POST", `/api/operator/shipments/${id}/advance`, {}, true),
     refund: (id: string) => req("POST", `/api/operator/donations/${id}/refund`, {}, true),
     refundFarmerOrder: (id: string) => req<{ message: string }>("POST", `/api/operator/farmer-orders/${id}/refund`, {}, true),
+    dispatch: () => req<{ truck: { name: string; capacityKg: number }; proposals: RunPlan[]; runs: DispatchRun[] }>("GET", "/api/operator/dispatch", undefined, true),
+    dispatchRun: (keys: string[], mode?: "truck" | "part_loads") => req<{ message: string }>("POST", "/api/operator/dispatch", { keys, mode }, true),
+    deliverRun: (id: string) => req<{ message: string }>("POST", `/api/operator/dispatch/${id}/delivered`, {}, true),
     harvests: () => req<Commitment[]>("GET", "/api/operator/harvests", undefined, true),
     harvestReady: (id: string) => req<{ message: string }>("POST", `/api/operator/harvests/${id}/ready`, {}, true),
     harvestFailed: (id: string) => req<{ message: string }>("POST", `/api/operator/harvests/${id}/failed`, {}, true),

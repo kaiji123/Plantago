@@ -140,6 +140,7 @@ CREATE TABLE IF NOT EXISTS shipments (
   eta_days INTEGER NOT NULL,
   history TEXT NOT NULL DEFAULT '[]',
   updated_at TEXT NOT NULL,
+  run_id TEXT,                        -- dispatch run (truck) carrying it
   UNIQUE (plan_id, grower_id)
 );
 
@@ -190,8 +191,31 @@ CREATE TABLE IF NOT EXISTS farmer_orders (
   paypal_refund_id TEXT UNIQUE,
   simulated INTEGER NOT NULL DEFAULT 0,
   payout_id TEXT REFERENCES payouts(id),
+  run_id TEXT,
   created_at TEXT NOT NULL,
   paid_at TEXT,
+  updated_at TEXT NOT NULL
+);
+
+-- A truck run: pickups and drop-offs in order along the road network.
+CREATE TABLE IF NOT EXISTS dispatch_runs (
+  id TEXT PRIMARY KEY,
+  status TEXT NOT NULL CHECK (status IN ('on_road','delivered')),
+  mode TEXT NOT NULL DEFAULT 'truck',        -- 'truck' or 'part_loads'
+  vehicle TEXT NOT NULL,
+  capacity_kg REAL NOT NULL,
+  load_kg REAL NOT NULL,
+  km REAL NOT NULL,
+  hours REAL NOT NULL,
+  days INTEGER NOT NULL,
+  cost_cents INTEGER NOT NULL,
+  separate_cost_cents INTEGER NOT NULL,
+  stops TEXT NOT NULL,
+  path TEXT NOT NULL,
+  roads TEXT NOT NULL,
+  cargo TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  delivered_at TEXT,
   updated_at TEXT NOT NULL
 );
 
@@ -251,6 +275,11 @@ function migrate(db: DB): void {
     db.exec(`ALTER TABLE crops ADD COLUMN meals_per_unit REAL NOT NULL DEFAULT 0`);
     db.exec(`ALTER TABLE crops ADD COLUMN reliability REAL NOT NULL DEFAULT 0`);
   }
+  if (db.prepare(`SELECT name FROM sqlite_master WHERE name = 'dispatch_runs'`).get() && !has("dispatch_runs", "mode"))
+    db.exec(`ALTER TABLE dispatch_runs ADD COLUMN mode TEXT NOT NULL DEFAULT 'truck'`);
+  if (!has("shipments", "run_id")) db.exec(`ALTER TABLE shipments ADD COLUMN run_id TEXT`);
+  if (db.prepare(`SELECT name FROM sqlite_master WHERE name = 'farmer_orders'`).get() && !has("farmer_orders", "run_id"))
+    db.exec(`ALTER TABLE farmer_orders ADD COLUMN run_id TEXT`);
   if (!has("payouts", "paid_at")) db.exec(`ALTER TABLE payouts ADD COLUMN paid_at TEXT`);
   // Payouts that succeeded before paid_at existed: their last update is when they were paid.
   db.exec(`UPDATE payouts SET paid_at = updated_at WHERE status = 'SUCCESS' AND paid_at IS NULL`);

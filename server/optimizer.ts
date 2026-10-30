@@ -3,6 +3,7 @@
 
 import type { DB } from "./db.js";
 import { assertCents, type Cents } from "./money.js";
+import { DRIVING_HOURS_PER_DAY, haversineKm, roadPath, type RoadPath } from "./roads.js";
 import type { Climate, CropKind } from "./seed/kenya.js";
 
 // ---- Assumptions (shown on the methodology panel) ----
@@ -32,15 +33,10 @@ export const ASSUMPTIONS = {
 };
 
 export const MOMBASA = { lat: -4.0435, lng: 39.6682 };
+/** Per-km cost multiplier by road surface. */
+export const SURFACE_COST = { paved: 1, fair: 1.25, rough: 1.6 } as const;
 
-const R_EARTH_KM = 6371;
-export function haversineKm(a: { lat: number; lng: number }, b: { lat: number; lng: number }): number {
-  const toRad = (d: number) => (d * Math.PI) / 180;
-  const dLat = toRad(b.lat - a.lat);
-  const dLng = toRad(b.lng - a.lng);
-  const h = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLng / 2) ** 2;
-  return 2 * R_EARTH_KM * Math.asin(Math.sqrt(h));
-}
+export { haversineKm };
 
 // ---- Network snapshot ----
 export interface Crop {
@@ -149,6 +145,10 @@ export interface RouteInfo {
   country: string;
   transport: "road" | "sea";
   roadKm: number;
+  /** Road km weighted by surface (rough roads cost more per km to drive). */
+  roadCostKm?: number;
+  /** Highways used, e.g. ["A104", "A1"]. */
+  roads?: string[];
   seaKm: number;
   totalKm: number;
   days: number;
@@ -175,25 +175,45 @@ export interface FoodOption extends RouteInfo {
 }
 
 /** How goods get from a supplier to a destination: by road, or by sea to Mombasa then road. */
-export function route(g: Pick<Grower, "lat" | "lng" | "country" | "transport">, d: Destination): RouteInfo {
+export function route(g: Pick<Grower, "lat" | "lng" | "country" | "transport">, d: Pick<Destination, "lat" | "lng">): RouteInfo {
   const crossBorder = (g.country ?? "Kenya") !== "Kenya";
+  const days = (hours: number) => Math.max(1, Math.ceil(hours / DRIVING_HOURS_PER_DAY));
+  const costKm = (p: RoadPath) => p.km + p.surfaces.fair * (SURFACE_COST.fair - 1) + p.surfaces.rough * (SURFACE_COST.rough - 1);
   if (g.transport === "sea") {
     const seaKm = haversineKm(g, MOMBASA) * ASSUMPTIONS.seaRouteFactor;
-    const roadKm = haversineKm(MOMBASA, d) * d.roadFactor;
-    const days =
-      Math.ceil(seaKm / ASSUMPTIONS.seaKmPerDay) + ASSUMPTIONS.portDays + Math.max(1, Math.ceil(roadKm / ASSUMPTIONS.truckKmPerDay));
-    return { country: g.country, transport: "sea", roadKm: round1(roadKm), seaKm: round1(seaKm), totalKm: round1(seaKm + roadKm), days, crossBorder };
+    const road = roadPath(MOMBASA, d);
+    return {
+      country: g.country,
+      transport: "sea",
+      roadKm: round1(road.km),
+      roadCostKm: round1(costKm(road)),
+      roads: ["sea freight", ...road.roads],
+      seaKm: round1(seaKm),
+      totalKm: round1(seaKm + road.km),
+      days: Math.ceil(seaKm / ASSUMPTIONS.seaKmPerDay) + ASSUMPTIONS.portDays + days(road.hours),
+      crossBorder,
+    };
   }
-  const roadKm = haversineKm(g, d) * d.roadFactor;
-  const days = Math.max(1, Math.ceil(roadKm / ASSUMPTIONS.truckKmPerDay)) + (crossBorder ? ASSUMPTIONS.borderDays : 0);
-  return { country: g.country ?? "Kenya", transport: "road", roadKm: round1(roadKm), seaKm: 0, totalKm: round1(roadKm), days, crossBorder };
+  const road = roadPath(g, d);
+  return {
+    country: g.country ?? "Kenya",
+    transport: "road",
+    roadKm: round1(road.km),
+    roadCostKm: round1(costKm(road)),
+    roads: road.roads,
+    seaKm: 0,
+    totalKm: round1(road.km),
+    // Border days come from the crossings on the actual route.
+    days: days(road.hours) + road.borderCrossings * ASSUMPTIONS.borderDays,
+    crossBorder,
+  };
 }
 
 /** Delivered transport cost per kg along a route. */
 export function transportCentsPerKg(r: RouteInfo | number): number {
   const ri: RouteInfo = typeof r === "number" ? { country: "Kenya", transport: "road", roadKm: r, seaKm: 0, totalKm: r, days: 0, crossBorder: false } : r;
   return (
-    (ri.roadKm * ASSUMPTIONS.transportCentsPerTonneKm) / 1000 +
+    ((ri.roadCostKm ?? ri.roadKm) * ASSUMPTIONS.transportCentsPerTonneKm) / 1000 +
     ASSUMPTIONS.handlingCentsPerKg +
     (ri.seaKm * ASSUMPTIONS.seaCentsPerTonneKm) / 1000 +
     (ri.transport === "sea" ? ASSUMPTIONS.portCentsPerKg : 0) +
@@ -474,8 +494,9 @@ export function allocate(net: Network, input: AllocateInput): Allocation {
       growBudget += foodBudget;
       foodLeft = 0;
     } else {
-      // Harvest buy-back promises come first: farmers who grew Plantago seed get paid before anyone else.
-      const promised = food.filter((o) => o.growerKind === "farmer_group");
+      // Harvest buy-back promises come first: this destination's own farmer group, who grew Plantago seed,
+      // gets paid before anyone else. Other places' farmer groups compete on price like any grower.
+      const promised = food.filter((o) => o.growerKind === "farmer_group" && o.growerId === `fg-${destinationId}`);
       if (promised.length) {
         const spentOnPromises = fill(lines, promised, foodLeft, 1, "food_now");
         if (spentOnPromises > 0) notes.push("Buys back harvest from a farmer group that grew Plantago seed, as promised.");

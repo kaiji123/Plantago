@@ -11,7 +11,7 @@ Built for the PayPal AI Hackathon (2026).
 ## How it works
 
 ```
-Donor ──PayPal Orders v2──▶ Plantago ──AI planner (Claude + tools)──▶ plan
+Donor ──PayPal Orders v2──▶ Plantago ──AI planner (DeepSeek + tools)──▶ plan
                                 │                                      │
                           public ledger ◀──PayPal Payouts── grower payments ◀┘
                                 │
@@ -19,17 +19,32 @@ Donor ──PayPal Orders v2──▶ Plantago ──AI planner (Claude + tools)
 ```
 
 1. **Give.** The donor chooses a destination on the network map. They can pick what to send from the **plant catalog**: food now (maize, sorghum, millet, beans, cowpeas, green grams…) or drought-tolerant seed to plant. Each item shows delivered price, meals per dollar, growers and distance for that destination, and anything that doesn't fit (it spoils on the road, or doesn't suit arid land) is greyed out with the reason. Or the donor can leave the choice to the planner. Catalog picks are binding: the server checks them and the planner's tools can't go outside them. The donor chooses an amount and can describe what they want ("feed families this month, and help them plant if it's the season"). PayPal checkout creates and captures an order tagged with the donation ID. The server checks that the captured amount matches before accepting it.
-2. **Plan.** Claude (`claude-opus-5-5`) runs a tool loop:
+2. **Plan.** An LLM (DeepSeek `deepseek-flash` by default, through its OpenAI-compatible API) runs a tool loop:
    - `get_destination_profile`: need level, climate, planting season and the fixed budget.
    - `list_food_now_options`: ready food ranked by meals per dollar, including transport.
    - `list_grow_there_options`: seed suited to the local climate, with risk-adjusted harvests.
    - `build_allocation`: the optimizer costs a strategy (share of food vs seed, preference for local growers).
    - `submit_plan`: picks one costed allocation and writes the donor-facing explanation.
 
-   **The AI chooses; code does the maths.** The budget is fixed on the server, and Claude can only submit an allocation the optimizer built, so it never sets an amount. If Claude is unavailable, a rule-based planner uses the same optimizer.
+   **The AI chooses; code does the maths.** The budget is fixed on the server, and the model can only submit an allocation the optimizer built, so it never sets an amount. Every tool call's arguments are parsed and validated before anything runs. If the AI is unavailable, a rule-based planner uses the same optimizer.
 3. **Pay growers.** Planned orders are grouped by grower and sent as one PayPal Payouts batch. This happens automatically once a destination's unpaid orders reach a threshold, or when the operator clicks *Run payout batch now*.
    The network is **global**. Kenyan growers sit alongside suppliers in Uganda and Tanzania (cross-border trucking, plus border fees and time) and India and South Africa (sea freight to Mombasa, port handling, then road). It also sells **tools**: hermetic storage bags, family drip-irrigation kits and hand-tool sets, bought in whole units. Their impact is a rough per-season estimate and is labelled that way. Each catalog item has **growth facts** (days to harvest, water per season, typical yield, seed multiplier, drought tolerance, harvest odds at the destination) and a short **Wikipedia article**, fetched from Wikipedia's REST API and shown with CC BY-SA attribution.
 4. **Track.** The **Network** page shows the whole plant network on a 3D **globe** (or a flat map): every grower, seed supplier and destination, with routes drawn by status (planned, paid, on the road, delivered) and thickness by kg, and idle growers greyed out. Each grower's shipment moves through sourced → shipped → delivered. The donor's page shows the plan, a map of routes, the deliveries and an impact receipt with PayPal IDs.
+
+### Roads, pathfinding and dispatch
+
+- **Road network.** A graph of about 60 towns, border posts and the Mombasa port. It covers Kenya's main highways (A1 to Lodwar, A2 to Marsabit, A3 to Wajir, B8 along the coast) and the corridors into Uganda (Malaba, Busia, Moroto–Lokiriama) and Tanzania (Namanga). Each segment is paved, fair or rough, which sets its speed and cost per km. A border crossing adds a routing penalty and customs days.
+- **Pathfinding.** Dijkstra shortest paths by driving time. Farms and towns join the network at their nearest junction by feeder road. These road distances drive every price, delivery time and map line in the app; routes on the 2D maps follow the highways.
+- **Dispatch** (operator console). Paid shipments are grouped into runs:
+  1. Cluster drop-offs within 250 km by road.
+  2. Pack them into 3-tonne trucks, largest loads first.
+  3. Order the stops: start at the farthest pickup, take the nearest next stop, improve with 2-opt, then deliver.
+  4. Split off any out-of-the-way pickup whose detour costs more than sending it separately.
+  5. Cost each run two ways and recommend the cheaper:
+     - **Dedicated truck:** $60 per day plus $0.45 per km, more on rough roads.
+     - **Part loads on scheduled lorries:** 3× the bulk freight rate plus $5 per consignment.
+
+  Imports are handed over where they enter Kenya: sea freight at Mombasa port, road freight at the border post. Each run shows its load against the break-even point, the weight at which a truck starts paying off. One click dispatches a run and marks its loads on the road; another marks the run delivered.
 
 ### Cash in farmers' hands
 
@@ -68,7 +83,7 @@ Plantago is built to get cash to the people who grow food, not just food to the 
 | Payments (refund capture) | Returning donations that can't be fulfilled |
 | Webhooks (verify signature; `PAYMENT.CAPTURE.*`, `PAYMENT.PAYOUTS-ITEM.*`) | Confirming payments and payout status |
 
-**AI:** Claude via the Anthropic TypeScript SDK (tool runner, adaptive thinking, server-side refusal fallback).
+**AI:** DeepSeek (`deepseek-flash`, thinking mode with tool calling) via the OpenAI SDK. Any OpenAI-compatible provider can be swapped in with `PLANNER_BASE_URL` and `PLANNER_MODEL`. Each plan stores its token usage and estimated cost.
 **Sponsor tool:** AG Grid (operator console and public ledger).
 **Other:** React, react-globe.gl (three.js) with NASA Blue Marble imagery, Leaflet with Natural Earth country shapes (public domain, served by the app), Wikipedia REST API, Express, SQLite.
 
@@ -84,6 +99,23 @@ npm run dev               # API on :8787, web on http://localhost:5173
 
 With no keys set, the app runs in **simulation mode**. A banner says so, payment IDs start with `SIM-`, and the rule-based planner is used. Everything else works the same.
 
+### Demo data
+
+```bash
+npm run seed:reset
+```
+
+Wipes all activity and plays a short story through the real code so every screen has something to show:
+- **Marsabit:** a delivered donation.
+- **Lodwar:** seed sent months ago, the harvest bought back from the Lodwar Farmer Group, and that group spending its earnings in the farmer shop.
+- **Kakuma:** shipments on the road from Uganda.
+- **Wajir:** tools and seed being sourced from India, Tanzania and Uganda.
+- **Mandera:** a plan waiting for the payout batch.
+
+It always uses simulated payments and the rule-based planner, even if keys are set, so it never creates sandbox orders or spends AI credits. It's safe to run while the server is running. On Render, run it from the service's Shell tab.
+
+The **Farmers** and **Shop** pages have a "Viewing as" switcher so you can act as any farmer. It's a stand-in for farmer sign-in, which a real version would do with Log in with PayPal.
+
 ### Use the PayPal sandbox
 
 1. At <https://developer.paypal.com/dashboard/applications/sandbox>, create an app and copy its **Client ID** and **Secret** into `.env`.
@@ -93,7 +125,7 @@ With no keys set, the app runs in **simulation mode**. A banner says so, payment
 
 ### Use the AI planner
 
-Set `ANTHROPIC_API_KEY` in `.env`. The model defaults to `claude-opus-5-5` (`PLANNER_MODEL`).
+Create a key at <https://platform.deepseek.com/api_keys> and set `DEEPSEEK_API_KEY` in `.env`. The model defaults to `deepseek-flash` (`PLANNER_MODEL`); `deepseek-v4-pro` is the larger option. For another OpenAI-compatible provider, set `PLANNER_BASE_URL`, `PLANNER_API_KEY` and `PLANNER_MODEL`, and `PLANNER_THINKING=off` if it rejects DeepSeek's `thinking` field.
 
 ### Tests
 
@@ -117,7 +149,7 @@ Suggested path: Give → pay $50 to Lodwar with the sandbox buyer → watch the 
 ## Data sources and assumptions
 
 - 1 meal = 700 kcal, a third of the 2,100 kcal/day standard ration (Sphere).
-- Truck transport: about $0.15 per tonne-km plus $0.02/kg handling, at 350 km/day. Road distance = straight line × a road factor for each destination.
+- Freight in donor prices: the bulk rate, about $0.15 per tonne-km plus $0.02/kg handling, along road-network distances (rough roads ×1.6, fair ×1.25). Delivery days come from driving time at 9 hours a day.
 - Crop energy and protein are typical values for the dry form. Seed yields and drought tolerance are rough figures for rain-fed farming in arid and semi-arid areas, and harvests are risk-adjusted.
 - Need levels are illustrative, informed by public IPC and FEWS NET reporting on Kenya's arid north.
 - Cross-border road: +$0.03/kg and +2 days. Sea: about $1.7 per tonne per 1,000 km, plus $0.05/kg port handling and 5 days at Mombasa.
