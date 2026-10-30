@@ -1,9 +1,7 @@
-import L from "leaflet";
-import { useEffect, useMemo, useState } from "react";
-import { MapContainer, Marker, Polyline, Tooltip, useMap } from "react-leaflet";
+import { useMemo, useState } from "react";
 import { api, num, usd, type DispatchRun, type DispatchStop, type RunPlan } from "../api";
 import { usePoll } from "../hooks";
-import { Basemap, RoadsLayer, useRoads } from "./NetworkMap";
+import { RunMap } from "./RunView";
 
 type Shown = { kind: "proposal"; plan: RunPlan } | { kind: "run"; run: DispatchRun };
 
@@ -129,7 +127,7 @@ export default function Dispatch({ act, busy }: { act: (fn: () => Promise<unknow
         </div>
 
         <div className="dispatch-map">
-          <RunMap shown={shown} />
+          <ShownMap shown={shown} />
           {shown && <Manifest shown={shown} />}
         </div>
       </div>
@@ -237,64 +235,11 @@ function Manifest({ shown }: { shown: Shown }) {
   );
 }
 
-const stopIcon = (n: number, kind: "pickup" | "drop") =>
-  L.divIcon({ className: "", html: `<div class="stop-pin ${kind}">${n}</div>`, iconSize: [26, 26], iconAnchor: [13, 13] });
-
-function Fit({ points }: { points: [number, number][] }) {
-  const map = useMap();
-  const key = JSON.stringify(points);
-  useEffect(() => {
-    if (points.length > 1) map.fitBounds(points, { padding: [30, 30], maxZoom: 8 });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key, map]);
-  return null;
-}
-
-function RunMap({ shown }: { shown: Shown | null }) {
-  const roads = useRoads();
-  const stops = shown ? (shown.kind === "proposal" ? shown.plan.stops : shown.run.stops) : [];
-  const path = shown ? (shown.kind === "proposal" ? shown.plan.path : shown.run.path) : [];
-  const onRoad = shown?.kind === "run" && shown.run.status === "on_road";
-  const done = shown?.kind === "run" && shown.run.status === "delivered";
-  return (
-    <div className="map" style={{ height: 460 }}>
-      <MapContainer center={[1.5, 37.5]} zoom={6} minZoom={4} maxZoom={9} scrollWheelZoom style={{ height: "100%", width: "100%" }}>
-        <Basemap />
-        <RoadsLayer roads={roads} k={1.2} />
-        {path.length > 1 && (
-          <>
-            <Polyline positions={path} pathOptions={{ color: "#fff", weight: 7, opacity: 0.9, lineCap: "round" }} />
-            <Polyline
-              positions={path}
-              pathOptions={{
-                color: done ? "#1f4d3a" : "#2a7ab0",
-                weight: 3.5,
-                lineCap: "round",
-                dashArray: onRoad ? "10 7" : undefined,
-                className: onRoad ? "flow-anim" : undefined,
-              }}
-            />
-          </>
-        )}
-        {stops.map((s, i) => (
-          <Marker key={s.id + i} position={[s.lat, s.lng]} icon={stopIcon(i + 1, s.kind)}>
-            <Tooltip direction="top" offset={[0, -12]}>
-              <strong>
-                {i + 1}. {s.kind === "pickup" ? "Pick up at" : "Deliver to"} {s.name}
-              </strong>
-              {s.note && (
-                <>
-                  <br />
-                  {s.note}
-                </>
-              )}
-              <br />
-              {num(s.kg, 1)} kg · {s.cargo.length} load{s.cargo.length === 1 ? "" : "s"}
-            </Tooltip>
-          </Marker>
-        ))}
-        <Fit points={path.length ? path : stops.map((s) => [s.lat, s.lng] as [number, number])} />
-      </MapContainer>
-    </div>
+function ShownMap({ shown }: { shown: Shown | null }) {
+  if (!shown) return <RunMap stops={[]} path={[]} />;
+  return shown.kind === "proposal" ? (
+    <RunMap stops={shown.plan.stops} path={shown.plan.path} status="planned" />
+  ) : (
+    <RunMap stops={shown.run.stops} path={shown.run.path} status={shown.run.status} />
   );
 }

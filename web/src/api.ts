@@ -202,6 +202,7 @@ export interface DonationView {
   shipments: Shipment[];
   payouts: { id: string; status: string; amount_cents: number; paypal_item_id: string | null; paypal_batch_id: string | null; grower_name: string }[];
   commitments: Commitment[];
+  runs: DispatchRun[];
 }
 
 export interface RoadNetwork {
@@ -322,6 +323,40 @@ export interface ShopItem {
   wholeUnits: boolean;
   options: ShopOption[];
 }
+export interface DeliveryDetails {
+  contactName: string;
+  contactPhone: string;
+  deliveryPoint: string;
+  preferredDate?: string;
+  note?: string;
+}
+export interface RequestSuggestion {
+  cropId: string;
+  name: string;
+  why: string;
+  fromCents: number;
+  unit: string;
+}
+export interface FarmerRequest {
+  id: string;
+  farmer_id: string;
+  farmer_name: string;
+  town: string;
+  country: string;
+  need: string;
+  quantity: string | null;
+  budget_cents: number | null;
+  needed_by: string | null;
+  purpose: string | null;
+  contact_phone?: string | null;
+  suggestions: RequestSuggestion[];
+  suggestion_note: string | null;
+  status: "open" | "sourcing" | "fulfilled" | "declined";
+  reply: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface FarmerOrder {
   id: string;
   crop_id: string;
@@ -368,6 +403,19 @@ export interface FarmerDetail {
   offers: { crop_id: string; crop: string; unit: string; price_cents_per_kg: number; stock_kg: number }[];
   commitments: Commitment[];
   purchases: FarmerOrder[];
+  runs?: DispatchRun[];
+  requests?: FarmerRequest[];
+}
+
+export interface DeliveryStats {
+  runs: number;
+  trucks: number;
+  onRoad: number;
+  km: number;
+  kg: number;
+  costCents: number;
+  savedCents: number;
+  waitingLoads: number;
 }
 
 export interface Ledger {
@@ -424,11 +472,18 @@ export const api = {
   capture: (donationId: string, orderId: string) => req<{ ok: true }>("POST", `/api/donations/${donationId}/capture`, { orderId }),
   donation: (id: string) => req<DonationView>("GET", `/api/donations/${id}`),
   ledger: () => req<Ledger>("GET", "/api/ledger"),
+  deliveries: () => req<{ stats: DeliveryStats; runs: DispatchRun[] }>("GET", "/api/deliveries"),
   farmers: () => req<{ farmers: FarmerRow[]; stats: FarmerStats }>("GET", "/api/farmers"),
   farmer: (id: string) => req<FarmerDetail>("GET", `/api/farmers/${encodeURIComponent(id)}`),
   shop: (farmerId: string) => req<ShopItem[]>("GET", `/api/farmers/${encodeURIComponent(farmerId)}/shop`),
-  createFarmerOrder: (farmerId: string, b: { supplierId: string; cropId: string; qty: number }) =>
+  createFarmerOrder: (farmerId: string, b: { supplierId: string; cropId: string; qty: number; delivery: DeliveryDetails }) =>
     req<{ orderId: string; paypalOrderId: string; totalCents: number }>("POST", `/api/farmers/${encodeURIComponent(farmerId)}/orders`, b),
+  createRequest: (farmerId: string, b: { need: string; quantity?: string; budget?: string; neededBy?: string; purpose?: string; contactPhone?: string }) =>
+    req<{ id: string; suggestions: RequestSuggestion[]; note: string | null; matchedBy: "ai" | "keywords" }>(
+      "POST",
+      `/api/farmers/${encodeURIComponent(farmerId)}/requests`,
+      b,
+    ),
   captureFarmerOrder: (orderId: string, paypalOrderId: string) =>
     req<{ status: string; message?: string }>("POST", `/api/farmer-orders/${orderId}/capture`, { paypalOrderId }),
   operator: {
@@ -442,6 +497,9 @@ export const api = {
     dispatch: () => req<{ truck: { name: string; capacityKg: number }; proposals: RunPlan[]; runs: DispatchRun[] }>("GET", "/api/operator/dispatch", undefined, true),
     dispatchRun: (keys: string[], mode?: "truck" | "part_loads") => req<{ message: string }>("POST", "/api/operator/dispatch", { keys, mode }, true),
     deliverRun: (id: string) => req<{ message: string }>("POST", `/api/operator/dispatch/${id}/delivered`, {}, true),
+    requests: () => req<FarmerRequest[]>("GET", "/api/operator/requests", undefined, true),
+    updateRequest: (id: string, status: FarmerRequest["status"], reply: string) =>
+      req<{ message: string }>("POST", `/api/operator/requests/${id}`, { status, reply }, true),
     harvests: () => req<Commitment[]>("GET", "/api/operator/harvests", undefined, true),
     harvestReady: (id: string) => req<{ message: string }>("POST", `/api/operator/harvests/${id}/ready`, {}, true),
     harvestFailed: (id: string) => req<{ message: string }>("POST", `/api/operator/harvests/${id}/failed`, {}, true),

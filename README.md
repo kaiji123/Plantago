@@ -1,5 +1,7 @@
 # Plantago
 
+[![CI](https://github.com/kaiji123/Plantago/actions/workflows/ci.yml/badge.svg)](https://github.com/kaiji123/Plantago/actions/workflows/ci.yml)
+
 **A PayPal donation, turned into food grown or bought as close as possible to the people who need it.**
 
 A donor picks a place in northern Kenya and pays with PayPal. An AI planner searches a network of Kenyan growers, compares buying food now with sending drought-tolerant seed, and explains which option feeds the most people for the money. Plantago then pays the chosen growers directly with PayPal Payouts, and every dollar in and out appears on a public ledger with its PayPal transaction ID.
@@ -71,7 +73,8 @@ Plantago is built to get cash to the people who grow food, not just food to the 
 - Every PayPal call that moves money sends a `PayPal-Request-Id`, so a retry can't charge or pay twice. Payout batches use our batch ID as `sender_batch_id`.
 - Orders are claimed for a payout inside a database transaction *before* PayPal is called, so no order is paid twice. A failed batch is retried with the same ID rather than released.
 - Refunds (PayPal Payments API) are only possible before any grower on that plan is paid. The check and the cancellation happen in one transaction.
-- Webhooks are verified with PayPal's `verify-webhook-signature`. Duplicates are ignored, and unverified events are logged but never acted on.
+- Webhooks are verified with PayPal's `verify-webhook-signature`. Duplicates are ignored, and unverified events are logged but never acted on (a verified retry of the same event is). A refund made from the PayPal dashboard (`PAYMENT.CAPTURE.REFUNDED`) undoes an unpaid plan exactly like an in-app refund. If suppliers were already paid, it's recorded and the ledger shows the shortfall.
+- Real payouts start as PENDING or UNCLAIMED. The server checks open payout batches with PayPal every minute until every item reaches its final status, and payout webhooks update them sooner when configured.
 - Ledger: received − refunded − paid out = held. The tests check that it balances.
 
 ## PayPal APIs used

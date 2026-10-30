@@ -4,6 +4,7 @@ import { api, num, usd, type DonationView, type Flows, type TraceEntry } from ".
 import CropIcon from "../components/CropIcon";
 import { ShipStatusPill } from "../components/ShipmentStatus";
 import { PromiseCard } from "./Farmers";
+import { RunSummary } from "../components/RunView";
 import NetworkMap, { type EdgeStatus, type MapEdge } from "../components/NetworkMap";
 import { usePoll } from "../hooks";
 
@@ -201,6 +202,28 @@ export default function DonationPage() {
                 {data.commitments.map((c) => <PromiseCard key={c.id} c={c} />)}
               </div>
             </>
+          )}
+
+          <h3>How your food travels</h3>
+          {data.runs.length === 0 ? (
+            <p className="muted small" style={{ marginTop: 0 }}>
+              {shipments.some((s) => s.status === "awaiting_payment")
+                ? "Once the suppliers are paid, Plantago groups your loads with others heading the same way and routes them along the road network."
+                : "Your loads are ready and waiting for the next truck or scheduled lorry heading north."}
+            </p>
+          ) : (
+            <div className="runs-public">
+              {data.runs.map((r) => (
+                <RunSummary
+                  key={r.id}
+                  run={r}
+                  mine={r.cargo.filter((c) => shipments.some((s) => `sh:${s.id}` === c.key)).map((c) => c.key)}
+                />
+              ))}
+              {shipments.some((s) => s.status === "sourced") && (
+                <p className="muted small">Some of your loads are still waiting for the next truck or lorry.</p>
+              )}
+            </div>
           )}
 
           <h3>Deliveries</h3>

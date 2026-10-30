@@ -9,6 +9,7 @@ process.env.DEEPSEEK_API_KEY = "";
 process.env.PAYOUT_THRESHOLD_USD = "100000";
 
 const { openDb } = await import("./db.js");
+const DEMO_DELIVERY = { contactName: "Akai Lokwang", contactPhone: "+254 712 345 678", deliveryPoint: "Kalokol road, next to the borehole" };
 const pay = await import("./payments.js");
 
 async function waitForPlan(db: any, donationId: string) {
@@ -137,11 +138,11 @@ test("farmer shop: farmer pays with PayPal, supplier is paid out, delivery track
   assert.ok(bags.options[0].deliveredCentsPerUnit <= bags.options[1].deliveredCentsPerUnit);
   const best = bags.options[0];
 
-  await assert.rejects(shop.createFarmerOrder(db, { buyerId: "g-kitui-1", supplierId: best.supplierId, cropId: "hermetic_bag", qty: 2.5 }), /whole/);
-  await assert.rejects(shop.createFarmerOrder(db, { buyerId: "s-katumani-1", supplierId: best.supplierId, cropId: "hermetic_bag", qty: 2 }), /Only farmers/);
+  await assert.rejects(shop.createFarmerOrder(db, { buyerId: "g-kitui-1", supplierId: best.supplierId, cropId: "hermetic_bag", qty: 2.5, delivery: DEMO_DELIVERY }), /whole/);
+  await assert.rejects(shop.createFarmerOrder(db, { buyerId: "s-katumani-1", supplierId: best.supplierId, cropId: "hermetic_bag", qty: 2, delivery: DEMO_DELIVERY }), /Only farmers/);
 
   const stockBefore = (db.prepare(`SELECT stock_kg s FROM offers WHERE grower_id=? AND crop_id='hermetic_bag'`).get(best.supplierId) as any).s;
-  const o = await shop.createFarmerOrder(db, { buyerId: "g-kitui-1", supplierId: best.supplierId, cropId: "hermetic_bag", qty: 10 });
+  const o = await shop.createFarmerOrder(db, { buyerId: "g-kitui-1", supplierId: best.supplierId, cropId: "hermetic_bag", qty: 10, delivery: DEMO_DELIVERY });
   assert.equal(o.totalCents, Math.round(10 * best.unitCents) + Math.round(10 * best.deliveryCentsPerUnit));
   const cap = await shop.captureFarmerOrder(db, o.orderId, o.paypalOrderId);
   assert.equal(cap.status, "paid");
@@ -163,7 +164,7 @@ test("farmer shop: farmer pays with PayPal, supplier is paid out, delivery track
   assert.equal(l.totals.receivedCents, 0, "farmer purchases are not counted as donations");
 
   // Refund before the supplier is paid puts stock back.
-  const o2 = await shop.createFarmerOrder(db, { buyerId: "g-kitui-1", supplierId: best.supplierId, cropId: "hermetic_bag", qty: 3 });
+  const o2 = await shop.createFarmerOrder(db, { buyerId: "g-kitui-1", supplierId: best.supplierId, cropId: "hermetic_bag", qty: 3, delivery: DEMO_DELIVERY });
   await shop.captureFarmerOrder(db, o2.orderId, o2.paypalOrderId);
   await shop.refundFarmerOrder(db, o2.orderId);
   const stockFinal = (db.prepare(`SELECT stock_kg s FROM offers WHERE grower_id=? AND crop_id='hermetic_bag'`).get(best.supplierId) as any).s;
@@ -215,4 +216,53 @@ test("dispatch: big loads share a truck and save money; small loads go as part l
   dispatch.deliverRun(db, sent.id);
   const delivered = db.prepare(`SELECT COUNT(*) n FROM shipments WHERE run_id = ? AND status = 'delivered'`).get(sent.id) as any;
   assert.equal(delivered.n, keys.length);
+});
+
+test("a refund made in the PayPal dashboard (verified webhook) undoes an unpaid plan, once", async () => {
+  const db = openDb(":memory:");
+  const stockBefore = (db.prepare(`SELECT SUM(stock_kg) s FROM offers`).get() as any).s;
+  const { donationId, orderId } = await pay.createDonation(db, { destinationId: "marsabit", amountCents: 3000, goal: "" });
+  await pay.captureDonation(db, donationId, orderId);
+  await waitForPlan(db, donationId);
+  const captureId = (db.prepare(`SELECT paypal_capture_id c FROM donations WHERE id = ?`).get(donationId) as any).c;
+  const event = {
+    id: "WH-REFUND-1",
+    event_type: "PAYMENT.CAPTURE.REFUNDED",
+    resource: { id: "REFUND-1", links: [{ rel: "up", href: `https://api-m.sandbox.paypal.com/v2/payments/captures/${captureId}` }] },
+  };
+  await pay.handlePayPalEvent(db, event, false); // unverified: ignored
+  assert.equal((db.prepare(`SELECT status FROM donations WHERE id = ?`).get(donationId) as any).status, "captured");
+  await pay.handlePayPalEvent(db, event, true);
+  await pay.handlePayPalEvent(db, event, true); // duplicate delivery is a no-op
+  assert.equal((db.prepare(`SELECT status FROM donations WHERE id = ?`).get(donationId) as any).status, "refunded");
+  assert.equal((db.prepare(`SELECT status FROM plans WHERE donation_id = ?`).get(donationId) as any).status, "cancelled");
+  const stockAfter = (db.prepare(`SELECT SUM(stock_kg) s FROM offers`).get() as any).s;
+  assert.ok(Math.abs(stockAfter - stockBefore) < 0.01, "stock released");
+  assert.equal((await pay.runPayoutBatch(db)).batchId, null, "nothing paid for a refunded donation");
+});
+
+test("farmer shop: delivery details are required and stay off public pages; requests get shop suggestions", async () => {
+  const db = openDb(":memory:");
+  const shop = await import("./shop.js");
+  const { farmerDetail } = await import("./farmers.js");
+  const requests = await import("./requests.js");
+  const bags = shop.shopCatalog(db, "g-kitui-1").find((i) => i.cropId === "hermetic_bag")!;
+  const base = { buyerId: "g-kitui-1", supplierId: bags.options[0].supplierId, cropId: "hermetic_bag", qty: 2 };
+  await assert.rejects(shop.createFarmerOrder(db, { ...base, delivery: { ...DEMO_DELIVERY, contactPhone: "call me" } }), /phone/);
+  await assert.rejects(shop.createFarmerOrder(db, { ...base, delivery: { ...DEMO_DELIVERY, deliveryPoint: "" } }), /where to deliver/);
+  const o = await shop.createFarmerOrder(db, { ...base, delivery: DEMO_DELIVERY });
+  await shop.captureFarmerOrder(db, o.orderId, o.paypalOrderId);
+  const pub = JSON.stringify(farmerDetail(db, "g-kitui-1"));
+  assert.ok(!pub.includes("712 345 678") && !pub.includes("borehole"), "contact details not on the public farmer page");
+
+  // No AI key in tests: keyword matching.
+  const r = await requests.createRequest(db, "g-kitui-1", { need: "Weevils keep eating our stored grain", quantity: "20 sacks", budget: "60" });
+  assert.equal(r.suggestions[0]?.cropId, "hermetic_bag");
+  const r2 = await requests.createRequest(db, "g-kitui-1", { need: "A diesel water pump for the river plot" });
+  assert.ok(r2.suggestions.some((s) => s.cropId === "drip_kit") || r2.note);
+  await assert.rejects(requests.createRequest(db, "s-katumani-1", { need: "anything at all" }), /Only farmers/);
+  requests.updateRequest(db, r2.id, "sourcing", "We're asking pump suppliers in Kitui.");
+  const mine = requests.listRequests(db, { farmerId: "g-kitui-1" });
+  assert.equal(mine.length, 2);
+  assert.ok(!("contact_phone" in mine[0]));
 });

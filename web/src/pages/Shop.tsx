@@ -1,7 +1,8 @@
 import { PayPalButtons, PayPalScriptProvider } from "@paypal/react-paypal-js";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { api, num, usd, type FarmerDetail, type ShopItem } from "../api";
+import { api, num, usd, type DeliveryDetails, type FarmerDetail, type ShopItem } from "../api";
+import RequestForm from "../components/RequestForm";
 import CropIcon from "../components/CropIcon";
 import FarmerSwitcher from "../components/FarmerSwitcher";
 import { useConfig } from "../hooks";
@@ -18,6 +19,14 @@ export default function ShopPage() {
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [details, setDetails] = useState<DeliveryDetails>(() => loadDelivery(id));
+  useEffect(() => setDetails(loadDelivery(id)), [id]);
+  const setField = (k: keyof DeliveryDetails, v: string) =>
+    setDetails((d) => {
+      const next = { ...d, [k]: v };
+      saveDelivery(id, next);
+      return next;
+    });
   const orderRef = useRef<string | null>(null);
 
   const load = () => {
@@ -37,6 +46,9 @@ export default function ShopPage() {
   const goods = opt ? Math.round(qty * opt.unitCents) : 0;
   const delivery = opt ? Math.round(qty * opt.deliveryCentsPerUnit) : 0;
   const qtyOk = !!item && !!opt && qty > 0 && qty <= opt.stock && (!item.wholeUnits || Number.isInteger(qty)) && goods + delivery >= 100;
+  const detailsOk =
+    details.contactName.trim().length >= 2 && /^\+?[0-9][0-9 -]{6,18}$/.test(details.contactPhone.trim()) && details.deliveryPoint.trim().length >= 3;
+  const canPay = qtyOk && detailsOk;
 
   function pick(i: ShopItem) {
     setCropId(i.cropId);
@@ -48,7 +60,7 @@ export default function ShopPage() {
 
   async function start() {
     setError(null);
-    const r = await api.createFarmerOrder(id, { supplierId: opt!.supplierId, cropId: item!.cropId, qty });
+    const r = await api.createFarmerOrder(id, { supplierId: opt!.supplierId, cropId: item!.cropId, qty, delivery: details });
     orderRef.current = r.orderId;
     return r.paypalOrderId;
   }
@@ -94,6 +106,7 @@ export default function ShopPage() {
       {done && <div className="card notice">{done}</div>}
 
       <div className="shop-grid">
+        <div className="shop-left">
         <div className="shop-items">
           {items.map((i) => {
             const best = i.options[0];
@@ -109,6 +122,15 @@ export default function ShopPage() {
               </button>
             );
           })}
+        </div>
+          <RequestForm
+            farmerId={g.id}
+            onPick={(cropId) => {
+              const i = items.find((x) => x.cropId === cropId);
+              if (i) pick(i);
+              window.scrollTo({ top: 0, behavior: "smooth" });
+            }}
+          />
         </div>
 
         <aside className="card shop-order">
@@ -152,9 +174,49 @@ export default function ShopPage() {
                 </tbody>
               </table>
               {!qtyOk && <p className="error small">Check the quantity{opt && qty > opt.stock ? `: only ${opt.stock} in stock` : ""}.</p>}
+
+              <fieldset className="delivery-form">
+                <legend>Delivery details</legend>
+                <div className="two-fields">
+                  <label className="field">
+                    <span>Contact name *</span>
+                    <input value={details.contactName} onChange={(e) => setField("contactName", e.target.value)} autoComplete="name" />
+                  </label>
+                  <label className="field">
+                    <span>Phone (for the driver) *</span>
+                    <input
+                      value={details.contactPhone}
+                      onChange={(e) => setField("contactPhone", e.target.value)}
+                      inputMode="tel"
+                      autoComplete="tel"
+                      placeholder="+254 712 345 678"
+                    />
+                  </label>
+                </div>
+                <label className="field">
+                  <span>Where should we deliver? *</span>
+                  <input
+                    value={details.deliveryPoint}
+                    onChange={(e) => setField("deliveryPoint", e.target.value)}
+                    placeholder={`Village, market or landmark near ${g.town}`}
+                  />
+                </label>
+                <div className="two-fields">
+                  <label className="field">
+                    <span>Preferred date</span>
+                    <input type="date" value={details.preferredDate ?? ""} onChange={(e) => setField("preferredDate", e.target.value)} />
+                  </label>
+                  <label className="field">
+                    <span>Note for the supplier</span>
+                    <input value={details.note ?? ""} onChange={(e) => setField("note", e.target.value)} placeholder="e.g. call on arrival" />
+                  </label>
+                </div>
+                <p className="muted small" style={{ margin: 0 }}>Only the Plantago operator and driver see your phone number and delivery point.</p>
+              </fieldset>
+              {qtyOk && !detailsOk && <p className="muted small">Fill in the delivery details to pay.</p>}
               {error && <p className="error small">{error}</p>}
               {cfg?.simulated ? (
-                <button className="btn primary wide" disabled={!qtyOk || busy} onClick={simulate}>
+                <button className="btn primary wide" disabled={!canPay || busy} onClick={simulate}>
                   {busy ? "Processing…" : `Simulate PayPal payment of ${usd(goods + delivery)}`}
                 </button>
               ) : (
@@ -162,8 +224,8 @@ export default function ShopPage() {
                   <PayPalScriptProvider options={paypalOptions}>
                     <PayPalButtons
                       style={{ layout: "vertical", shape: "rect", label: "pay" }}
-                      disabled={!qtyOk}
-                      forceReRender={[item.cropId, opt.supplierId, qty]}
+                      disabled={!canPay}
+                      forceReRender={[item.cropId, opt.supplierId, qty, JSON.stringify(details)]}
                       createOrder={start}
                       onApprove={async (data) => {
                         try {
@@ -189,3 +251,20 @@ export default function ShopPage() {
 }
 
 const o2s = (town: string, country: string) => `${town}, ${country}`;
+
+// Delivery details are remembered per farmer on this device, so repeat orders are quick.
+const EMPTY: DeliveryDetails = { contactName: "", contactPhone: "", deliveryPoint: "", preferredDate: "", note: "" };
+function loadDelivery(farmerId: string): DeliveryDetails {
+  try {
+    return { ...EMPTY, ...JSON.parse(localStorage.getItem(`plantago.delivery.${farmerId}`) ?? "{}") };
+  } catch {
+    return { ...EMPTY };
+  }
+}
+function saveDelivery(farmerId: string, d: DeliveryDetails) {
+  try {
+    localStorage.setItem(`plantago.delivery.${farmerId}`, JSON.stringify(d));
+  } catch {
+    /* storage unavailable */
+  }
+}

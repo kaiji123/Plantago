@@ -9,7 +9,8 @@ import { ASSUMPTIONS, catalog, loadNetwork, plantingWindow } from "./optimizer.j
 import { wikipediaSummary } from "./articles.js";
 import { farmerDetail, farmerStats, listFarmers } from "./farmers.js";
 import { listCommitments, markHarvestFailed, markHarvestReady } from "./harvest.js";
-import { deliverRun, dispatchRun, listRuns, PART_LOAD, proposeRuns, TRUCK } from "./dispatch.js";
+import { createRequest, listRequests, updateRequest, type RequestStatus } from "./requests.js";
+import { deliverRun, deliveryStats, dispatchRun, listRuns, PART_LOAD, proposeRuns, runsForGrower, runsForPlan, TRUCK } from "./dispatch.js";
 import { MOMBASA_PORT, roadNetwork, roadPath } from "./roads.js";
 import { advanceFarmerOrder, captureFarmerOrder, createFarmerOrder, listFarmerOrders, refundFarmerOrder, shopCatalog } from "./shop.js";
 import { cropBlurbs, cropGrowth } from "./seed/kenya.js";
@@ -19,6 +20,7 @@ import {
   handlePayPalEvent,
   ledger,
   refreshPayoutBatch,
+  refreshOpenPayouts,
   refundDonation,
   retryPayoutBatch,
   runPayoutBatch,
@@ -252,8 +254,12 @@ app.get("/api/donations/:id", (req, res) => {
     shipments,
     payouts,
     commitments: plan ? listCommitments(db, { planId: plan.id }) : [],
+    runs: plan ? runsForPlan(db, plan.id) : [],
   });
 });
+
+// Public, read-only: every dispatch run and logistics totals.
+app.get("/api/deliveries", (_req, res) => res.json({ stats: deliveryStats(db), runs: listRuns(db, undefined, 200) }));
 
 app.get("/api/ledger", (_req, res) => res.json({ ...ledger(db), farmers: farmerStats(db) }));
 
@@ -264,10 +270,19 @@ app.post(
   "/api/farmers/:id/orders",
   rateLimit(20, 60 * 60 * 1000),
   h(async (req, res) => {
-    const { supplierId, cropId, qty } = req.body ?? {};
-    res.json(await createFarmerOrder(db, { buyerId: String(req.params.id), supplierId: String(supplierId), cropId: String(cropId), qty: Number(qty) }));
+    const { supplierId, cropId, qty, delivery } = req.body ?? {};
+    res.json(
+      await createFarmerOrder(db, { buyerId: String(req.params.id), supplierId: String(supplierId), cropId: String(cropId), qty: Number(qty), delivery }),
+    );
   }),
 );
+// Farmer requests for things the shop doesn't list.
+app.post(
+  "/api/farmers/:id/requests",
+  rateLimit(10, 60 * 60 * 1000),
+  h(async (req, res) => res.json(await createRequest(db, String(req.params.id), req.body ?? {}))),
+);
+
 app.post(
   "/api/farmer-orders/:id/capture",
   h(async (req, res) => res.json(await captureFarmerOrder(db, String(req.params.id), String(req.body?.paypalOrderId ?? "")))),
@@ -276,7 +291,7 @@ app.post(
 app.get("/api/farmers/:id", (req, res) => {
   const f = farmerDetail(db, String(req.params.id));
   if (!f) return res.status(404).json({ error: "Not found" });
-  res.json(f);
+  res.json({ ...f, runs: runsForGrower(db, String(req.params.id)), requests: listRequests(db, { farmerId: String(req.params.id) }) });
 });
 
 // ---------- PayPal webhooks ----------
@@ -342,7 +357,10 @@ op.get("/overview", (_req, res) => {
       kind: "farmer_order",
       destination: `${o.buyer_name} (farmer order)`,
       grower: o.supplier_name,
-      description: o.crop_kind === "tool" ? `${o.qty} × ${o.crop_name.toLowerCase()}` : `${o.qty} kg ${o.crop_name.toLowerCase()} seed`,
+      description:
+        (o.crop_kind === "tool" ? `${o.qty} × ${o.crop_name.toLowerCase()}` : `${o.qty} kg ${o.crop_name.toLowerCase()} seed`) +
+        (o.delivery_point ? ` → ${o.delivery_point}` : "") +
+        (o.contact_phone ? ` · call ${o.contact_name ?? ""} ${o.contact_phone}` : ""),
       status: o.delivery_status,
       eta_days: o.eta_days,
       updated_at: o.updated_at,
@@ -401,6 +419,12 @@ op.post("/dispatch/:id/delivered", (req, res) => {
   res.json({ ok: true, message: "Run delivered: every load on it is marked delivered." });
 });
 
+op.get("/requests", (_req, res) => res.json(listRequests(db, { includeContact: true })));
+op.post("/requests/:id", (req, res) => {
+  updateRequest(db, String(req.params.id), String(req.body?.status) as RequestStatus, String(req.body?.reply ?? ""));
+  res.json({ ok: true, message: "Request updated; the farmer sees your reply on their page." });
+});
+
 op.get("/harvests", (_req, res) => res.json(listCommitments(db)));
 op.post("/harvests/:id/ready", h(async (req, res) => {
   try {
@@ -441,6 +465,11 @@ const dist = path.resolve(here, "../dist");
 if (fs.existsSync(dist)) {
   app.use(express.static(dist, { index: false, maxAge: "1h" }));
   app.get(/^(?!\/api\/).*/, (_req, res) => res.sendFile(path.join(dist, "index.html")));
+}
+
+// Real sandbox payouts start PENDING (or UNCLAIMED): follow them to their final status.
+if (!paypalSimulated) {
+  setInterval(() => void refreshOpenPayouts(db), 60_000).unref();
 }
 
 app.listen(config.port, () => {

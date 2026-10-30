@@ -7,6 +7,7 @@ import { KIND_COLOR, KIND_LABEL } from "../components/NetworkMap";
 import { usePoll } from "../hooks";
 import { SHIP_META, ShipStatusPill } from "../components/ShipmentStatus";
 import FarmerSwitcher, { lastFarmer } from "../components/FarmerSwitcher";
+import { RunSummary } from "../components/RunView";
 
 export default function FarmersPage() {
   const { id } = useParams();
@@ -149,6 +150,47 @@ function FarmerDetailPage({ id }: { id: string }) {
         </>
       )}
 
+      {(data.requests?.length ?? 0) > 0 && (
+        <>
+          <h3>Requests</h3>
+          <div className="requests-list">
+            {data.requests!.map((r) => (
+              <div key={r.id} className={`card request-item ${r.status}`}>
+                <div className="row" style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
+                  <strong>{r.need}</strong>
+                  <span className={`req-status ${r.status}`}>{REQ_LABEL[r.status]}</span>
+                </div>
+                <div className="muted small">
+                  {[r.quantity, r.budget_cents != null ? `budget ${usd(r.budget_cents)}` : null, r.needed_by ? `by ${r.needed_by}` : null]
+                    .filter(Boolean)
+                    .join(" · ")}
+                  {" · "}sent {new Date(r.created_at).toLocaleDateString()}
+                </div>
+                {r.suggestions.length > 0 && (
+                  <div className="muted small">
+                    Suggested from the shop: {r.suggestions.map((s) => s.name).join(", ")}{" "}
+                    {canShop && <Link to={`/farmers/${g.id}/shop`}>Open the shop →</Link>}
+                  </div>
+                )}
+                {r.reply && <div className="reply">💬 Plantago: {r.reply}</div>}
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+
+      {(data.runs?.length ?? 0) > 0 && (
+        <>
+          <h3>Trips</h3>
+          <p className="muted small" style={{ marginTop: 0 }}>Trucks and scheduled lorries that collected from {g.name} or delivered its shop purchases.</p>
+          <div className="runs-public">
+            {data.runs!.slice(0, 6).map((r) => (
+              <RunSummary key={r.id} run={r} showMap={false} />
+            ))}
+          </div>
+        </>
+      )}
+
       {commitments.length > 0 && (
         <>
           <h3>Harvest buy-back promises</h3>
@@ -207,6 +249,8 @@ function FarmerDetailPage({ id }: { id: string }) {
     </div>
   );
 }
+
+const REQ_LABEL = { open: "Received", sourcing: "Finding a supplier", fulfilled: "Fulfilled", declined: "Not possible" } as const;
 
 const canShopKind = (k: string) => ["farm", "coop", "farmer_group"].includes(k);
 

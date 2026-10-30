@@ -116,14 +116,45 @@ export function quote(db: DB, buyerId: string, supplierId: string, cropId: strin
   return { item, opt, goods, delivery, total: goods + delivery };
 }
 
-export async function createFarmerOrder(db: DB, input: { buyerId: string; supplierId: string; cropId: string; qty: number }) {
+export interface DeliveryDetails {
+  contactName: string;
+  contactPhone: string;
+  deliveryPoint: string;
+  preferredDate?: string;
+  note?: string;
+}
+
+const clean = (s: unknown, max: number) => (typeof s === "string" ? s.trim().replace(/\s+/g, " ").slice(0, max) : "");
+
+/** Validate the delivery form. Phone: digits with optional +, spaces or dashes (e.g. +254 712 345 678). */
+export function checkDelivery(d: Partial<DeliveryDetails> | undefined): DeliveryDetails {
+  const contactName = clean(d?.contactName, 80);
+  const contactPhone = clean(d?.contactPhone, 24);
+  const deliveryPoint = clean(d?.deliveryPoint, 160);
+  const preferredDate = clean(d?.preferredDate, 10);
+  const note = clean(d?.note, 400);
+  if (contactName.length < 2) throw new UserError("Enter a contact name for the delivery");
+  if (!/^\+?[0-9][0-9 -]{6,18}$/.test(contactPhone)) throw new UserError("Enter a phone number the driver can call, e.g. +254 712 345 678");
+  if (deliveryPoint.length < 3) throw new UserError("Say where to deliver: a village, market or landmark");
+  if (preferredDate && !/^\d{4}-\d{2}-\d{2}$/.test(preferredDate)) throw new UserError("Preferred date must be a date");
+  return { contactName, contactPhone, deliveryPoint, preferredDate: preferredDate || undefined, note: note || undefined };
+}
+
+export async function createFarmerOrder(
+  db: DB,
+  input: { buyerId: string; supplierId: string; cropId: string; qty: number; delivery?: Partial<DeliveryDetails> },
+) {
   const q = quote(db, input.buyerId, input.supplierId, input.cropId, input.qty);
+  const d = checkDelivery(input.delivery);
   const id = newId("fo");
   db.prepare(
     `INSERT INTO farmer_orders (id, buyer_id, supplier_id, crop_id, qty, goods_cents, delivery_cents, total_cents, status, distance_km, eta_days,
-       simulated, delivery_history, created_at, updated_at)
-     VALUES (?,?,?,?,?,?,?,?, 'created', ?, ?, ?, '[]', ?, ?)`,
-  ).run(id, input.buyerId, input.supplierId, input.cropId, input.qty, q.goods, q.delivery, q.total, q.opt.distanceKm, q.opt.days, paypalSimulated ? 1 : 0, now(), now());
+       simulated, delivery_history, contact_name, contact_phone, delivery_point, preferred_date, note, created_at, updated_at)
+     VALUES (?,?,?,?,?,?,?,?, 'created', ?, ?, ?, '[]', ?,?,?,?,?, ?, ?)`,
+  ).run(
+    id, input.buyerId, input.supplierId, input.cropId, input.qty, q.goods, q.delivery, q.total, q.opt.distanceKm, q.opt.days, paypalSimulated ? 1 : 0,
+    d.contactName, d.contactPhone, d.deliveryPoint, d.preferredDate ?? null, d.note ?? null, now(), now(),
+  );
   const { orderId } = await paypal.createOrder({
     donationId: id,
     amountCents: q.total,

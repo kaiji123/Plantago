@@ -192,8 +192,31 @@ CREATE TABLE IF NOT EXISTS farmer_orders (
   simulated INTEGER NOT NULL DEFAULT 0,
   payout_id TEXT REFERENCES payouts(id),
   run_id TEXT,
+  contact_name TEXT,                  -- delivery details: operator-only, never shown publicly
+  contact_phone TEXT,
+  delivery_point TEXT,
+  preferred_date TEXT,
+  note TEXT,
   created_at TEXT NOT NULL,
   paid_at TEXT,
+  updated_at TEXT NOT NULL
+);
+
+-- A farmer asking for something the shop doesn't list (or a bigger order).
+CREATE TABLE IF NOT EXISTS farmer_requests (
+  id TEXT PRIMARY KEY,
+  farmer_id TEXT NOT NULL REFERENCES growers(id),
+  need TEXT NOT NULL,
+  quantity TEXT,
+  budget_cents INTEGER,
+  needed_by TEXT,
+  purpose TEXT,
+  contact_phone TEXT,
+  suggestions TEXT NOT NULL DEFAULT '[]', -- JSON: shop items the AI (or keywords) matched
+  suggestion_note TEXT,
+  status TEXT NOT NULL CHECK (status IN ('open','sourcing','fulfilled','declined')) DEFAULT 'open',
+  reply TEXT,
+  created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
 
@@ -277,6 +300,8 @@ function migrate(db: DB): void {
   }
   if (db.prepare(`SELECT name FROM sqlite_master WHERE name = 'dispatch_runs'`).get() && !has("dispatch_runs", "mode"))
     db.exec(`ALTER TABLE dispatch_runs ADD COLUMN mode TEXT NOT NULL DEFAULT 'truck'`);
+  if (db.prepare(`SELECT name FROM sqlite_master WHERE name = 'farmer_orders'`).get() && !has("farmer_orders", "contact_phone"))
+    for (const c of ["contact_name", "contact_phone", "delivery_point", "preferred_date", "note"]) db.exec(`ALTER TABLE farmer_orders ADD COLUMN ${c} TEXT`);
   if (!has("shipments", "run_id")) db.exec(`ALTER TABLE shipments ADD COLUMN run_id TEXT`);
   if (db.prepare(`SELECT name FROM sqlite_master WHERE name = 'farmer_orders'`).get() && !has("farmer_orders", "run_id"))
     db.exec(`ALTER TABLE farmer_orders ADD COLUMN run_id TEXT`);

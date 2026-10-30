@@ -6,9 +6,10 @@ import Grid, { dateCol, moneyCol } from "../components/Grid";
 import { ShipAction, ShipStatusPill, type ShipStatus } from "../components/ShipmentStatus";
 import { PromiseCard } from "./Farmers";
 import Dispatch from "../components/Dispatch";
+import OperatorRequests from "../components/OperatorRequests";
 import { useConfig, usePoll } from "../hooks";
 
-type Tab = "dispatch" | "shipments" | "harvests" | "payouts" | "donations" | "network";
+type Tab = "dispatch" | "shipments" | "requests" | "harvests" | "payouts" | "donations" | "network";
 
 export default function OperatorPage() {
   const cfg = useConfig();
@@ -197,7 +198,7 @@ export default function OperatorPage() {
       {error && <p className="error">{error}</p>}
 
       <div className="tabs">
-        {(["dispatch", "shipments", "harvests", "payouts", "donations", "network"] as Tab[]).map((t) => (
+        {(["dispatch", "shipments", "requests", "harvests", "payouts", "donations", "network"] as Tab[]).map((t) => (
           <button key={t} className={tab === t ? "on" : ""} onClick={() => setTab(t)}>
             {t === "network" ? "Plant network" : t === "harvests" ? "Harvest buy-back" : t === "dispatch" ? "🚚 Dispatch" : t[0].toUpperCase() + t.slice(1)}
           </button>
@@ -205,6 +206,7 @@ export default function OperatorPage() {
       </div>
 
       {tab === "dispatch" && <Dispatch act={act} busy={busy} />}
+      {tab === "requests" && <OperatorRequests act={act} busy={busy} />}
       {tab === "shipments" && <Grid rows={data?.shipments ?? []} cols={shipmentCols} height={440} />}
       {tab === "harvests" && (
         <>

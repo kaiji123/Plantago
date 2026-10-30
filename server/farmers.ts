@@ -104,6 +104,10 @@ export function farmerDetail(db: DB, id: string) {
     sales,
     offers,
     commitments: listCommitments(db, { growerId: id }),
-    purchases: listFarmerOrders(db, { buyerId: id }),
+    // Delivery contact details are for the operator only; farmer pages are public in this demo.
+    purchases: listFarmerOrders(db, { buyerId: id }).map(({ contact_name, contact_phone, delivery_point, note, preferred_date, ...o }) => ({
+      ...o,
+      has_delivery_details: !!contact_phone,
+    })),
   };
 }

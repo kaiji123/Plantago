@@ -109,20 +109,76 @@ export async function refundDonation(db: DB, donationId: string): Promise<void> 
     if (plan) db.prepare(`UPDATE plans SET status=?, updated_at=? WHERE id=?`).run(plan.status, now(), plan.id);
     throw e;
   }
-  const finish = db.transaction(() => {
-    db.prepare(`UPDATE donations SET status='refunded', paypal_refund_id=?, refunded_at=? WHERE id=?`).run(r.refundId, now(), donationId);
-    if (plan) {
-      const lines = db.prepare(`SELECT grower_id, crop_id, kg FROM plan_lines WHERE plan_id = ?`).all(plan.id) as any[];
+  applyDonationRefund(db, donationId, plan?.id ?? null, r.refundId);
+}
+
+/** Record a refund and undo the (unpaid) plan: release stock, cancel promises and shipments. */
+function applyDonationRefund(db: DB, donationId: string, planId: string | null, refundId: string): void {
+  db.transaction(() => {
+    db.prepare(`UPDATE donations SET status='refunded', paypal_refund_id=?, refunded_at=? WHERE id=?`).run(refundId, now(), donationId);
+    if (planId) {
+      db.prepare(`UPDATE plans SET status='cancelled', updated_at=? WHERE id=?`).run(now(), planId);
+      const lines = db.prepare(`SELECT grower_id, crop_id, kg FROM plan_lines WHERE plan_id = ?`).all(planId) as any[];
       const release = db.prepare(`UPDATE offers SET stock_kg = stock_kg + ? WHERE grower_id = ? AND crop_id = ?`);
       for (const l of lines) {
         release.run(l.kg, l.grower_id, l.crop_id);
         if (String(l.grower_id).startsWith("fg-")) reverseBuyBack(db, l.grower_id, l.crop_id, l.kg);
       }
-      cancelCommitmentsForPlan(db, plan.id);
-      db.prepare(`DELETE FROM shipments WHERE plan_id = ?`).run(plan.id);
+      cancelCommitmentsForPlan(db, planId);
+      db.prepare(`DELETE FROM shipments WHERE plan_id = ?`).run(planId);
     }
-  });
-  finish();
+  })();
+}
+
+/**
+ * A refund made outside Plantago (e.g. from the PayPal dashboard), reported by webhook.
+ * If no supplier was paid yet, the plan is undone as for an in-app refund. If suppliers were
+ * already paid, the money really did go back to the donor: record it, keep the paid orders,
+ * and the ledger shows the shortfall.
+ */
+export function handleExternalRefund(db: DB, captureId: string, refundId: string): "donation" | "farmer_order" | "unknown" {
+  const d = db.prepare(`SELECT id, status FROM donations WHERE paypal_capture_id = ?`).get(captureId) as { id: string; status: string } | undefined;
+  if (d) {
+    if (d.status !== "captured") return "donation";
+    const plan = db.prepare(`SELECT id, status FROM plans WHERE donation_id = ?`).get(d.id) as { id: string; status: string } | undefined;
+    const paid = plan
+      ? (db.prepare(`SELECT COUNT(*) n FROM plan_lines WHERE plan_id = ? AND payout_id IS NOT NULL`).get(plan.id) as { n: number }).n
+      : 0;
+    if (paid === 0) applyDonationRefund(db, d.id, plan && plan.status === "ready" ? plan.id : null, refundId);
+    else db.prepare(`UPDATE donations SET status='refunded', paypal_refund_id=?, refunded_at=? WHERE id=?`).run(refundId, now(), d.id);
+    return "donation";
+  }
+  const o = db.prepare(`SELECT * FROM farmer_orders WHERE paypal_capture_id = ?`).get(captureId) as any;
+  if (o) {
+    if (o.status !== "paid") return "farmer_order";
+    db.transaction(() => {
+      db.prepare(`UPDATE farmer_orders SET status='refunded', paypal_refund_id=?, updated_at=? WHERE id=?`).run(refundId, now(), o.id);
+      // Only put stock back if the supplier hasn't been paid (the goods are still theirs).
+      if (!o.payout_id) db.prepare(`UPDATE offers SET stock_kg = stock_kg + ? WHERE grower_id = ? AND crop_id = ?`).run(o.qty, o.supplier_id, o.crop_id);
+    })();
+    return "farmer_order";
+  }
+  return "unknown";
+}
+
+/** Payout batches whose items may still change (PENDING, UNCLAIMED…), sent in the last 31 days. */
+export async function refreshOpenPayouts(db: DB): Promise<number> {
+  const open = db
+    .prepare(
+      `SELECT DISTINCT b.id FROM payout_batches b
+         LEFT JOIN payouts p ON p.batch_id = b.id
+        WHERE b.paypal_batch_id IS NOT NULL AND b.simulated = 0 AND b.created_at > ?
+          AND (b.status NOT IN ('SUCCESS','DENIED','CANCELED') OR p.status IN ('PENDING','UNCLAIMED','ONHOLD','NEW'))`,
+    )
+    .all(new Date(Date.now() - 31 * 86_400_000).toISOString()) as { id: string }[];
+  for (const b of open) {
+    try {
+      await refreshPayoutBatch(db, b.id);
+    } catch (e) {
+      console.error("[payouts] refresh failed for", b.id, (e as Error).message);
+    }
+  }
+  return open.length;
 }
 
 // ---------- Payouts ----------
@@ -276,7 +332,12 @@ export async function handlePayPalEvent(db: DB, event: any, verified: boolean): 
   const ins = db
     .prepare(`INSERT OR IGNORE INTO paypal_events (id, event_type, resource_id, verified, received_at, body) VALUES (?,?,?,?,?,?)`)
     .run(event.id, event.event_type, event.resource?.id ?? null, verified ? 1 : 0, now(), JSON.stringify(event));
-  if (ins.changes === 0 || !verified) return; // duplicate, or not trusted enough to act on
+  if (!verified) return; // logged, but not trusted enough to act on
+  if (ins.changes === 0) {
+    // Seen before. Act only if every earlier delivery failed verification (PayPal retries).
+    const up = db.prepare(`UPDATE paypal_events SET verified = 1 WHERE id = ? AND verified = 0`).run(event.id);
+    if (up.changes === 0) return; // already handled
+  }
   const res = event.resource ?? {};
   switch (event.event_type) {
     case "PAYMENT.CAPTURE.COMPLETED": {
@@ -286,9 +347,13 @@ export async function handlePayPalEvent(db: DB, event: any, verified: boolean): 
         markCaptured(db, donationId, res.id, null);
       break;
     }
-    case "PAYMENT.CAPTURE.REFUNDED":
-      // Refunds made from the PayPal dashboard: reflect them, but only if nothing was paid out.
+    case "PAYMENT.CAPTURE.REFUNDED": {
+      // The refund resource links "up" to the capture it refunds.
+      const up = (res.links ?? []).find((l: any) => l.rel === "up")?.href as string | undefined;
+      const captureId = up?.split("/captures/")[1]?.split(/[/?]/)[0];
+      if (captureId) handleExternalRefund(db, captureId, res.id);
       break;
+    }
     default:
       if (String(event.event_type).startsWith("PAYMENT.PAYOUTS-ITEM.")) {
         const item = res.payout_item ?? {};

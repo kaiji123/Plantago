@@ -37,6 +37,7 @@ const { refreshShipmentDescriptions } = await import("../plans.js");
 const dispatch = await import("../dispatch.js");
 
 const db = openDb();
+const DEMO_DELIVERY = { contactName: "Akai Lokwang", contactPhone: "+254 712 345 678", deliveryPoint: "Kalokol road, next to the borehole" };
 const DAY = 86_400_000;
 const MIN = 60_000;
 const iso = (t: number) => new Date(t).toISOString();
@@ -45,6 +46,7 @@ const now = Date.now();
 // ---------- 1. Wipe activity and restore the network ----------
 db.transaction(() => {
   for (const t of [
+    "farmer_requests",
     "dispatch_runs",
     "paypal_events",
     "farmer_orders",
@@ -213,7 +215,7 @@ log("Wajir: tools and seed being sourced from India, Tanzania and Uganda");
 // F. The Lodwar Farmer Group spends part of its earnings in the shop.
 const tF = now - 1 * DAY;
 const bags = shop.shopCatalog(db, "fg-lodwar").find((i) => i.cropId === "hermetic_bag")!;
-const order = await shop.createFarmerOrder(db, { buyerId: "fg-lodwar", supplierId: bags.options[0].supplierId, cropId: "hermetic_bag", qty: 12 });
+const order = await shop.createFarmerOrder(db, { buyerId: "fg-lodwar", supplierId: bags.options[0].supplierId, cropId: "hermetic_bag", qty: 12, delivery: DEMO_DELIVERY });
 await shop.captureFarmerOrder(db, order.orderId, order.paypalOrderId);
 await pay.runPayoutBatch(db); // pays the bag maker (nothing else is unpaid yet); the order waits for a truck
 db.prepare(

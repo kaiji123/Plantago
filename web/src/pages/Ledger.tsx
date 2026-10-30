@@ -4,10 +4,14 @@ import { Link } from "react-router-dom";
 import { api, num, timeToCash, usd } from "../api";
 import Grid, { dateCol, moneyCol } from "../components/Grid";
 import { usePoll } from "../hooks";
+import { RunSummary } from "../components/RunView";
 
 export default function LedgerPage() {
   const { data, error } = usePoll(() => api.ledger(), 5000, []);
   const [q, setQ] = useState("");
+  const [tab, setTab] = useState<"money" | "deliveries">("money");
+  const deliveries = usePoll(() => api.deliveries(), 8000, []);
+  const ds = deliveries.data?.stats;
   const t = data?.totals;
 
   const cols: ColDef<any>[] = [
@@ -33,9 +37,32 @@ export default function LedgerPage() {
   return (
     <div className="page wide">
       <h1 className="h-page">Public ledger</h1>
-      <p className="muted">Every dollar in from donors and every dollar out to growers, with its PayPal transaction ID.</p>
-      {error && <p className="error">{error}</p>}
-      {t && (
+      <p className="muted">Every dollar in and out with its PayPal transaction ID, and every truck and lorry that moved the food.</p>
+      <div className="tabs">
+        <button className={tab === "money" ? "on" : ""} onClick={() => setTab("money")}>💵 Money</button>
+        <button className={tab === "deliveries" ? "on" : ""} onClick={() => setTab("deliveries")}>🚚 Deliveries</button>
+      </div>
+      {tab === "deliveries" && (
+        <>
+          {ds && (
+            <div className="stats ledger-stats">
+              <Stat label="runs (trucks and part-load lorries)" value={`${ds.runs} (${ds.trucks} trucks)`} />
+              <Stat label="on the road now" value={String(ds.onRoad)} />
+              <Stat label="km driven" value={num(ds.km)} />
+              <Stat label="kg moved" value={num(ds.kg)} />
+              <Stat label="saved by consolidating loads" value={usd(ds.savedCents)} />
+            </div>
+          )}
+          {(deliveries.data?.runs ?? []).length === 0 && <p className="muted">No deliveries yet.</p>}
+          <div className="runs-public">
+            {(deliveries.data?.runs ?? []).slice(0, 20).map((r, i) => (
+              <RunSummary key={r.id} run={r} showMap={i < 3} />
+            ))}
+          </div>
+        </>
+      )}
+      {tab === "money" && error && <p className="error">{error}</p>}
+      {tab === "money" && t && (
         <>
           <div className="stats ledger-stats">
             <Stat label="received from donors" value={usd(t.receivedCents)} />
@@ -63,8 +90,8 @@ export default function LedgerPage() {
           </p>
         </>
       )}
-      <input className="search" placeholder="Search by grower, place or transaction ID" value={q} onChange={(e) => setQ(e.target.value)} />
-      <Grid rows={data?.entries ?? []} cols={cols} height={520} quickFilter={q} />
+      {tab === "money" && <input className="search" placeholder="Search by grower, place or transaction ID" value={q} onChange={(e) => setQ(e.target.value)} />}
+      {tab === "money" && <Grid rows={data?.entries ?? []} cols={cols} height={520} quickFilter={q} />}
     </div>
   );
 }

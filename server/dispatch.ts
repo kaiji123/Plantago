@@ -406,12 +406,51 @@ export function deliverRun(db: DB, runId: string) {
   })();
 }
 
-export function listRuns(db: DB) {
-  return (db.prepare(`SELECT * FROM dispatch_runs ORDER BY created_at DESC LIMIT 50`).all() as any[]).map((r) => ({
+/** Dispatch runs, newest first. `ids` limits to specific runs (e.g. those carrying one donation). */
+export function listRuns(db: DB, ids?: string[], limit = 50) {
+  if (ids && ids.length === 0) return [];
+  const rows = ids
+    ? (db.prepare(`SELECT * FROM dispatch_runs WHERE id IN (${ids.map(() => "?").join(",")}) ORDER BY created_at DESC`).all(...ids) as any[])
+    : (db.prepare(`SELECT * FROM dispatch_runs ORDER BY created_at DESC LIMIT ?`).all(limit) as any[]);
+  return rows.map((r) => ({
     ...r,
     stops: JSON.parse(r.stops),
     path: JSON.parse(r.path),
     roads: JSON.parse(r.roads),
     cargo: JSON.parse(r.cargo),
   }));
+}
+
+/** Runs that carried a plan's shipments. */
+export function runsForPlan(db: DB, planId: string) {
+  const ids = (db.prepare(`SELECT DISTINCT run_id FROM shipments WHERE plan_id = ? AND run_id IS NOT NULL`).all(planId) as { run_id: string }[]).map((r) => r.run_id);
+  return listRuns(db, ids);
+}
+
+/** Runs that collected from a supplier or delivered a farmer's shop purchase. */
+export function runsForGrower(db: DB, growerId: string) {
+  const ids = (
+    db
+      .prepare(
+        `SELECT run_id FROM shipments WHERE grower_id = ? AND run_id IS NOT NULL
+         UNION SELECT run_id FROM farmer_orders WHERE (supplier_id = ? OR buyer_id = ?) AND run_id IS NOT NULL`,
+      )
+      .all(growerId, growerId, growerId) as { run_id: string }[]
+  ).map((r) => r.run_id);
+  return listRuns(db, ids);
+}
+
+/** Public logistics summary for the ledger's Deliveries tab. */
+export function deliveryStats(db: DB) {
+  const r = db
+    .prepare(
+      `SELECT COUNT(*) AS runs, COALESCE(SUM(km),0) AS km, COALESCE(SUM(load_kg),0) AS kg, COALESCE(SUM(cost_cents),0) AS cost,
+              COALESCE(SUM(MAX(separate_cost_cents - cost_cents, 0)),0) AS saved,
+              SUM(CASE WHEN mode='truck' THEN 1 ELSE 0 END) AS trucks,
+              SUM(CASE WHEN status='on_road' THEN 1 ELSE 0 END) AS on_road
+         FROM dispatch_runs`,
+    )
+    .get() as any;
+  const waiting = (db.prepare(`SELECT COUNT(*) n FROM shipments WHERE status = 'sourced' AND run_id IS NULL`).get() as { n: number }).n;
+  return { runs: r.runs, trucks: r.trucks ?? 0, onRoad: r.on_road ?? 0, km: Math.round(r.km), kg: Math.round(r.kg), costCents: r.cost, savedCents: r.saved, waitingLoads: waiting };
 }
