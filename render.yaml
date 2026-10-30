@@ -1,0 +1,38 @@
+# Render Blueprint. A paid instance with a disk keeps the demo awake and the
+# ledger intact through the judging period (Dec 1-15). Free instances sleep and
+# lose the SQLite file on every deploy.
+services:
+  - type: web
+    name: plantago
+    runtime: node
+    plan: starter
+    buildCommand: npm ci --include=dev && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/config
+    disk:
+      name: plantago-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+      - key: DATABASE_PATH
+        value: /var/data/plantago.db
+      - key: PAYPAL_API_BASE
+        value: https://api-m.sandbox.paypal.com
+      - key: PAYPAL_CLIENT_ID
+        sync: false
+      - key: PAYPAL_CLIENT_SECRET
+        sync: false
+      - key: PAYPAL_WEBHOOK_ID
+        sync: false
+      - key: PAYPAL_PAYOUT_RECEIVER_OVERRIDE
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: PLANNER_MODEL
+        value: claude-opus-5-5
+      - key: OPERATOR_TOKEN
+        sync: false
+      - key: PAYOUT_THRESHOLD_USD
+        value: "100"
