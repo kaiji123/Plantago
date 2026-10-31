@@ -67,9 +67,15 @@ export default function DonatePage() {
     return out;
   }, [flows, destId, catalog, pickedItems]);
 
+  // PayPal's button keeps the createOrder it was first given. Read the form through a ref so it always
+  // sends what's on screen, without reloading PayPal's iframe on every keystroke in the note.
+  const form = useRef({ destId, amount, goalText, picked });
+  form.current = { destId, amount, goalText, picked };
+
   async function startDonation() {
     setError(null);
-    const r = await api.createDonation({ destinationId: destId, amount, goal: goalText, choices: picked });
+    const f = form.current;
+    const r = await api.createDonation({ destinationId: f.destId, amount: f.amount, goal: f.goalText, choices: f.picked });
     donationRef.current = r.donationId;
     return r;
   }
@@ -220,7 +226,6 @@ export default function DonatePage() {
                 <PayPalButtons
                   style={{ layout: "vertical", shape: "rect", label: "donate" }}
                   disabled={!amountOk}
-                  forceReRender={[destId, amount, goalText, picked.join(",")]}
                   createOrder={async () => (await startDonation()).orderId}
                   onApprove={async (data) => {
                     try {

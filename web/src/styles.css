@@ -386,3 +386,27 @@ a.btn, a.btn:hover, a.btn:visited { text-decoration: none; }
 .reply { background: #f7f3ea; border-radius: 10px; padding: 6px 10px; font-size: 14px; }
 .request-reply { display: grid; grid-template-columns: 180px 1fr auto; gap: 8px; align-items: center; }
 @media (max-width: 520px) { .two-fields, .request-reply { grid-template-columns: 1fr; } }
+
+/* ---- Find a place: search box over the maps ---- */
+.map { position: relative; }
+.mapsearch { position: absolute; z-index: 1000; top: 10px; right: 10px; width: 340px; max-width: calc(100% - 64px); font-weight: 400; }
+.mapsearch .combo-input input { padding-right: 34px; background: #fff; box-shadow: 0 4px 16px rgba(30, 25, 10, .14); }
+.mapsearch-clear { position: absolute; right: 6px; width: 26px; height: 26px; border: 0; border-radius: 50%; background: transparent; color: var(--muted); font-size: 18px; line-height: 1; cursor: pointer; }
+.mapsearch-clear:hover { background: #f1efe8; color: inherit; }
+.mapsearch-panel { margin-top: 6px; background: #fff; border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 12px 32px rgba(30, 25, 10, .14); overflow: hidden; }
+.mapsearch-filters { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px; border-bottom: 1px solid var(--line); }
+.mapsearch-filters button { border: 1px solid var(--line); background: #fff; border-radius: 999px; padding: 3px 10px; font-size: 12px; font-weight: 600; cursor: pointer; display: inline-flex; gap: 5px; align-items: center; }
+.mapsearch-filters button .n { color: var(--muted); font-weight: 500; }
+.mapsearch-filters button.on { background: var(--green); border-color: var(--green); color: #fff; }
+.mapsearch-filters button.on .n { color: rgba(255, 255, 255, .75); }
+.mapsearch-list { margin: 0; padding: 6px; list-style: none; max-height: min(280px, calc(var(--map-h, 460px) - 190px)); overflow-y: auto; }
+.mapsearch mark { background: #fbe9b7; color: inherit; border-radius: 3px; padding: 0 1px; }
+.mapsearch-list li { display: flex; align-items: center; gap: 10px; padding: 7px 10px; border-radius: 8px; cursor: pointer; }
+.mapsearch-list li.active { background: #f1f7f3; }
+.mapsearch-list li.combo-empty { cursor: default; color: var(--muted); font-size: 14px; }
+.combo-dot.dest { box-shadow: 0 0 0 2px #fff, 0 0 0 3px currentColor; color: #d9d1c0; }
+.found-ring { animation: found-pulse 1.6s ease-in-out 3; }
+@keyframes found-pulse { 50% { stroke-opacity: .35; fill-opacity: .05; } }
+@media (max-width: 520px) {
+  .mapsearch { left: 54px; right: 10px; width: auto; max-width: none; }
+}

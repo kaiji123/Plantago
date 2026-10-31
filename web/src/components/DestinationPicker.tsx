@@ -5,7 +5,7 @@ const PHASE_LABEL: Record<number, string> = { 3: "Crisis", 4: "Emergency", 5: "F
 const PHASE_COLOR: Record<number, string> = { 3: "#e9a23b", 4: "#d1492e", 5: "#8c1c13" };
 
 /** Bold the part of `text` that matches `q`. */
-function Highlight({ text, q }: { text: string; q: string }) {
+export function Highlight({ text, q }: { text: string; q: string }) {
   const i = q ? text.toLowerCase().indexOf(q.toLowerCase()) : -1;
   if (i < 0) return <>{text}</>;
   return (

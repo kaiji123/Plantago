@@ -143,8 +143,8 @@ npm run typecheck
 
 ## Testing instructions for judges
 
-- **Hosted demo:** _URL to be added_
-- **Sandbox buyer login:** _to be added_ (a PayPal sandbox personal account. It is not a real account.)
+- **Hosted demo:** https://plantago.onrender.com (free instance: the first visit after a quiet spell can take about a minute to wake up)
+- **Sandbox buyer login:** `sb-qyofx53623150@personal.example.com` / `_c^WB=8|` (a PayPal sandbox personal account with test money. It is not a real account and no real money moves.)
 - **Operator token:** _to be added_ (opens the Operator page to run payouts and advance deliveries)
 
 Suggested path: Give → pay $50 to Lodwar with the sandbox buyer → watch the plan appear → Operator → *Run payout batch now* → mark shipments shipped and delivered → back to your donation page and the Public ledger.

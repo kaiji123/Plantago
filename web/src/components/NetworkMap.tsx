@@ -1,8 +1,9 @@
 import type { FeatureCollection } from "geojson";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { CircleMarker, GeoJSON, MapContainer, Pane, Polyline, Tooltip, useMap, useMapEvents } from "react-leaflet";
 import { feature } from "topojson-client";
 import { api, type FlowGrower, type NetDestination, type RoadNetwork } from "../api";
+import MapSearch, { placesFrom, type Place } from "./MapSearch";
 
 export type EdgeStatus = "candidate" | "queued" | "paid" | "shipped" | "delivered";
 
@@ -165,15 +166,22 @@ export function useRoads(): RoadNetwork | null {
   return roads;
 }
 
-/** Fit the view once per change of what's shown. */
-function FitTo({ points, maxZoom }: { points: LatLng[]; maxZoom: number }) {
+/**
+ * Fit the view once per change of what's shown. A place picked in the search box wins:
+ * the map stays on it, even when picking it changes the routes shown.
+ */
+function FitTo({ points, maxZoom, focus }: { points: LatLng[]; maxZoom: number; focus: Place | null }) {
   const map = useMap();
   const key = JSON.stringify(points);
   useEffect(() => {
+    if (focus) {
+      map.flyTo([focus.lat, focus.lng], Math.max(map.getZoom(), 7), { duration: 0.8 });
+      return;
+    }
     if (points.length < 2) return;
     map.fitBounds(points, { padding: [24, 24], maxZoom });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key, map]);
+  }, [key, map, focus]);
   return null;
 }
 
@@ -188,6 +196,7 @@ export default function NetworkMap({
   fadeIdle = true,
   view = "fit",
   showRoads = true,
+  searchable = true,
 }: {
   growers: FlowGrower[];
   destinations: NetDestination[];
@@ -201,10 +210,22 @@ export default function NetworkMap({
   view?: "fit" | "world";
   /** Draw the highway network underneath. */
   showRoads?: boolean;
+  /** Show the "find a place" search box over the map. */
+  searchable?: boolean;
 }) {
   const roads = useRoads();
   const [zoom, setZoom] = useState(view === "world" ? 3 : 5);
   const k = zoomScale(zoom);
+  const [found, setFound] = useState<Place | null>(null);
+  // Choosing another destination some other way (a dot, the Give form) lets the map fit again.
+  useEffect(() => {
+    setFound((f) => (f && !(f.type === "destination" && f.id === selectedDestinationId) ? null : f));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedDestinationId]);
+  const places = useMemo(
+    () => placesFrom(growers, destinations, { need: NEED_COLOR, kind: KIND_COLOR, kindLabel: KIND_LABEL }),
+    [growers, destinations],
+  );
   const g = new Map(growers.map((x) => [x.id, x]));
   const d = new Map(destinations.map((x) => [x.id, x]));
   const active = new Set(edges.map((e) => e.growerId));
@@ -222,9 +243,42 @@ export default function NetworkMap({
           ...destinations.filter((x) => x.id === selectedDestinationId).map((x) => [x.lat, x.lng] as LatLng),
         ];
 
+  const edgeLine = (e: MapEdge, i: number) => {
+    const from = g.get(e.growerId);
+    const to = d.get(e.destinationId) ?? g.get(e.destinationId); // a destination, or a farmer who bought in the shop
+    if (!from || !to) return null;
+    const st = EDGE_STYLE[e.status];
+    return (
+      <Polyline
+        key={`${e.growerId}-${e.destinationId}-${e.status}-${i}`}
+        positions={e.path ?? routePoints(from, to)}
+        pathOptions={{
+          color: st.color,
+          weight: edgeWidth(e) * k,
+          opacity: e.status === "candidate" ? 0.6 : 0.9,
+          dashArray: scaleDash(st.dash, k),
+          lineCap: "round",
+          className: st.animate ? "flow-anim" : undefined,
+        }}
+      >
+        {e.label && <Tooltip sticky>{e.label}</Tooltip>}
+      </Polyline>
+    );
+  };
+
   return (
     <div className="netmap">
-      <div className="map" style={{ height }}>
+      <div className="map" style={{ height, ["--map-h" as string]: `${height}px` }}>
+        {searchable && (
+          <MapSearch
+            places={places}
+            onClear={() => setFound(null)}
+            onPick={(p) => {
+              setFound(p);
+              if (p.type === "destination" && onSelectDestination && p.id !== selectedDestinationId) onSelectDestination(p.id);
+            }}
+          />
+        )}
         <MapContainer
           center={view === "world" ? [5, 50] : [0.9, 37.8]}
           zoom={view === "world" ? 3 : 5}
@@ -236,31 +290,14 @@ export default function NetworkMap({
         >
           <Basemap highlight={[...new Set(edges.map((e) => g.get(e.growerId)?.country).filter((c): c is string => !!c && c !== "Kenya"))]} />
           {showRoads && <RoadsLayer roads={roads} k={k} />}
-          <FitTo points={fitPoints} maxZoom={view === "world" ? 5 : 7} />
+          <FitTo points={fitPoints} maxZoom={view === "world" ? 5 : 7} focus={found} />
           <ZoomWatcher onZoom={setZoom} />
 
-          {sorted.map((e, i) => {
-            const from = g.get(e.growerId);
-            const to = d.get(e.destinationId) ?? g.get(e.destinationId); // a destination, or a farmer who bought in the shop
-            if (!from || !to) return null;
-            const st = EDGE_STYLE[e.status];
-            return (
-              <Polyline
-                key={`${e.growerId}-${e.destinationId}-${e.status}-${i}`}
-                positions={e.path ?? routePoints(from, to)}
-                pathOptions={{
-                  color: st.color,
-                  weight: edgeWidth(e) * k,
-                  opacity: e.status === "candidate" ? 0.6 : 0.9,
-                  dashArray: scaleDash(st.dash, k),
-                  lineCap: "round",
-                  className: st.animate ? "flow-anim" : undefined,
-                }}
-              >
-                {e.label && <Tooltip sticky>{e.label}</Tooltip>}
-              </Polyline>
-            );
-          })}
+          {sorted.filter((e) => !EDGE_STYLE[e.status].animate).map(edgeLine)}
+          {/* Moving routes get their own pane (their own SVG), so the dash animation repaints only them, not every route and road. */}
+          <Pane name="moving" style={{ zIndex: 410 }}>
+            {sorted.filter((e) => EDGE_STYLE[e.status].animate).map(edgeLine)}
+          </Pane>
 
           {growers.map((x) => {
             const on = active.has(x.id);
@@ -301,8 +338,9 @@ export default function NetworkMap({
                   pathOptions={{ color: NEED_COLOR[x.need_phase], weight: 1, dashArray: "2 3", fillColor: NEED_COLOR[x.need_phase], fillOpacity: 0.12 }}
                 />
               ),
+              // Keyed on selection: Leaflet only reads a tooltip's "permanent" when it is created.
               <CircleMarker
-                key={x.id}
+                key={`${x.id}-${sel ? "sel" : ""}`}
                 center={[x.lat, x.lng]}
                 radius={(sel ? 7.5 : 5.5) * k}
                 pathOptions={{ color: sel ? "#1f4d3a" : "#fff", weight: (sel ? 2 : 1.5) * Math.min(k, 1.6), fillColor: NEED_COLOR[x.need_phase] ?? "#e9a23b", fillOpacity: 1 }}
@@ -321,6 +359,25 @@ export default function NetworkMap({
               </CircleMarker>,
             ];
           })}
+
+          {found && (
+            // Own pane (its own small SVG): the pulse then repaints only the ring, not every road and route.
+            <Pane name="found" style={{ zIndex: 450 }}>
+            <CircleMarker
+              key={`found-${found.type}-${found.id}`}
+              center={[found.lat, found.lng]}
+              radius={16 * k}
+              interactive={false}
+              pathOptions={{ color: "#1f4d3a", weight: 2, dashArray: "3 4", fillColor: found.color, fillOpacity: 0.15, className: "found-ring" }}
+            >
+              {found.type === "grower" && (
+                <Tooltip direction="top" offset={[0, -14 * k]} permanent className="dest-label">
+                  {found.name}
+                </Tooltip>
+              )}
+            </CircleMarker>
+            </Pane>
+          )}
         </MapContainer>
       </div>
       {showLegend && <NetworkLegend statuses={[...new Set(edges.map((e) => e.status))]} showIdle={fadeIdle} />}
